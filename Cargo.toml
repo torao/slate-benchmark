@@ -1,0 +1,18 @@
+[package]
+name = "slate-benchmark"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slate = { git = "https://github.com/torao/stratified-hash-tree", rev = "f8080b8" }
+
+[dev-dependencies]
+criterion = { version = "0.6", features = ["html_reports"] }
+rand = "0.9"
+mt19937 = "3"
+leveldb = "0.8"
+db-key = "0.0.5"    # Match the version used by leveldb 0.8
+
+[[bench]]
+name = "slate"
+harness = false
