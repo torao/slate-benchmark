@@ -1,6 +1,8 @@
 use std::fs::{metadata, read_dir};
 use std::path::Path;
 
+pub mod hashtree;
+
 #[inline]
 pub fn u64_to_rand_bytes(value: u64, buffer: &mut [u8; 8]) {
   // SplitMix64

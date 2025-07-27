@@ -4,7 +4,7 @@ This repository contains benchmarks for the reference implementation of [Slate](
 
 ## Overview
 
-Slate is an append-optimized hash tree structure designed for efficient storage and retrieval of time-series data. This benchmark suite evaluates its performance characteristics against other data structures.
+Slate is an append-optimized Hash Tree (Merkle Tree) structure designed for efficient storage and retrieval of time-series data. This benchmark suite evaluates its performance characteristics against other data structures.
 
 ## Requirements
 
@@ -14,18 +14,13 @@ Slate is an append-optimized hash tree structure designed for efficient storage 
 ## Running Benchmarks
 
 ```bash
-# Run all benchmarks
-cargo bench
+# perform benchmarking by specifying the directory to be used for I/O
+cargo run --release -- /tmp
+```
 
-# Run specific benchmark group
-cargo bench append
-cargo bench random_get
-cargo bench recent_get
-cargo bench range_scan
+I've confirmed that this works on Windows and Linux (probably also on mac OS).
+CMake and C-compiler are required to build RocksDB with `cargo build`.
 
-# Generate baseline for comparison
-cargo bench -- --save-baseline main
-
-# Compare against baseline
-cargo bench -- --baseline main
+```bash
+sudo apt install llvm-dev libclang-dev clang
 ```

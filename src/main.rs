@@ -1,4 +1,4 @@
-use ::slate::{FileStorage, Index, Result, Slate};
+use ::slate::{BlockStorage, Index, Result, Slate};
 use chrono::Local;
 use clap::Parser;
 use slate_benchmark::file_size;
@@ -17,7 +17,7 @@ mod stat;
 #[command(about = "Benchmark file operations with configurable output directory")]
 struct Args {
   /// Output directory for benchmark results and working temporary files
-  #[arg(short, long, default_value = ".")]
+  #[arg(index = 1, default_value = ".")]
   dir: PathBuf,
 }
 
@@ -34,9 +34,6 @@ fn main() -> Result<()> {
   run_append_rocksdb(&dir, &id)?;
   run_append_seqfile(&dir, &id)?;
   run_append_slate(&dir, &id)?;
-
-  #[cfg(target_os = "linux")]
-  run_append_leveldb(&dir, &id)?;
 
   Ok(())
 }
@@ -81,7 +78,7 @@ fn run_append_slate(dir: &PathBuf, id: &str) -> Result<()> {
     for _ in 0..LOOP {
       // setup
       tf.as_file().set_len(0)?;
-      let storage = FileStorage::new(tf.path())?;
+      let storage = BlockStorage::from_file(tf.path(), false)?;
       let mut slate = Slate::new(storage)?;
 
       // run

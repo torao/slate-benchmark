@@ -5,12 +5,14 @@ edition = "2024"
 
 [dependencies]
 # slate = { git = "https://github.com/torao/stratified-hash-tree", rev = "46d6155" }
-slate = {path = "../slate"}
+slate = {path = "../slate", features = ["rocksdb", "blake3"] }
 clap = { version = "4.0", features = ["derive"] }
+byteorder = "1.5"
 tempfile = "3.0"
 thiserror = "2"
 chrono = "0.4"
 rocksdb = "0.23"
+blake3 = "1.8"
 
 [dev-dependencies]
 criterion = { version = "0.6", features = ["html_reports"] }
