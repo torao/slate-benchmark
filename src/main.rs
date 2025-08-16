@@ -1,13 +1,17 @@
-use ::slate::{BlockStorage, Index, Result, Slate};
+use ::slate::formula::{entry_access_distance, entry_access_distance_limits};
+use ::slate::{Index, Result};
 use chrono::Local;
 use clap::Parser;
-use slate_benchmark::file_size;
-use std::fs::{create_dir_all, remove_dir_all};
-use std::path::PathBuf;
-use std::time::Instant;
-use tempfile::Builder;
+use rand::seq::SliceRandom;
+use std::cmp;
+use std::env::current_dir;
+use std::fs::{self, create_dir_all};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::{Duration, Instant};
 
-mod rocksdb;
+use crate::stat::Stat;
+
 mod seqfile;
 mod slate;
 mod stat;
@@ -17,119 +21,454 @@ mod stat;
 #[command(about = "Benchmark file operations with configurable output directory")]
 struct Args {
   /// Output directory for benchmark results and working temporary files
-  #[arg(index = 1, default_value = ".")]
-  dir: PathBuf,
+  #[arg(index = 1, default_value_t = std::env::temp_dir().to_string_lossy().into_owned())]
+  dir: String,
 }
 
 fn main() -> Result<()> {
   let args = Args::parse();
 
-  let id = Local::now().format("%Y%m%d%H%M%S").to_string();
-
   // 作業ディレクトリ作成
-  let dir = args.dir;
-  create_dir_all(&dir)?;
-  println!("Working directory: {:?}", &dir);
+  let root = PathBuf::from_str(&args.dir).unwrap();
+  create_dir_all(&root)?;
+  println!("Working directory: {:?}", &root);
 
-  run_append_rocksdb(&dir, &id)?;
-  run_append_seqfile(&dir, &id)?;
-  run_append_slate(&dir, &id)?;
+  let experiment = Experiment::new(&root)?;
+
+  #[cfg(false)]
+  experiment
+    .case("volume-slate-file", true)?
+    .min_n(0)
+    .max_n(128 * 1024 * 1024)
+    .division(25)
+    .min_trials(1)
+    .max_trials(1)
+    .measure_the_storage_size_relative_to_the_amount_of_data(FileVolumeDriver::new())?;
+
+  #[cfg(false)]
+  experiment
+    .case("query-slate-file-large", true)?
+    .min_n(1)
+    .max_n(128 * 1024 * 1024)
+    .division(500)
+    .scale(Scale::Log)
+    .max_trials(100)
+    .stability_threshold(0.5)
+    .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileQueryDriver::new())?;
+
+  #[cfg(true)]
+  {
+    experiment
+      .case("query-slate-memkvs", false)?
+      .max_n(1024 * 1024)
+      .division(100)
+      .scale(Scale::WorstCase)
+      .max_trials(500)
+      .stability_threshold(0.5)
+      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::MemKVSQueryDriver::new())?;
+
+    experiment
+      .case("query-slate-file", false)?
+      .max_n(1024 * 1024)
+      .division(100)
+      .scale(Scale::WorstCase)
+      .max_trials(500)
+      .stability_threshold(0.5)
+      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileQueryDriver::new())?;
+
+    experiment
+      .case("query-slate-rocksdb", false)?
+      .max_n(1024 * 1024)
+      .division(100)
+      .scale(Scale::WorstCase)
+      .max_trials(500)
+      .stability_threshold(0.5)
+      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::RocksDBQueryDriver::new())?;
+  }
+
+  #[cfg(false)]
+  {
+    experiment
+      .case("append-seqfile-file", false)?
+      .max_n(1024 * 1024)
+      .division(10)
+      .min_trials(2)
+      .max_trials(10)
+      .measure_the_append_time_relative_to_the_amount_of_data(seqfile::AppendDriver::new())?;
+
+    experiment
+      .case("append-slate-memory", false)?
+      .max_n(1024 * 1024)
+      .division(10)
+      .min_trials(2)
+      .max_trials(10)
+      .measure_the_append_time_relative_to_the_amount_of_data(slate::MemoryAppendDriver::new())?;
+
+    experiment
+      .case("append-slate-file", false)?
+      .max_n(1024 * 1024)
+      .division(10)
+      .min_trials(2)
+      .max_trials(10)
+      .measure_the_append_time_relative_to_the_amount_of_data(slate::FileAppendDriver::new())?;
+
+    experiment
+      .case("append-slate-rocksdb", false)?
+      .max_n(1024 * 1024)
+      .division(10)
+      .min_trials(2)
+      .max_trials(10)
+      .measure_the_append_time_relative_to_the_amount_of_data(slate::RocksDBAppendDriver::new())?;
+  }
+
+  #[cfg(false)]
+  {
+    for level in 0..=3 {
+      experiment
+        .case(&format!("cache-slate-file-{level}"), true)?
+        .max_n(1024 * 1024)
+        .division(64)
+        .scale(Scale::WorstCase)
+        .max_trials(1000)
+        .stability_threshold(0.5)
+        .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileCacheDriver::new(level))?;
+    }
+  }
 
   Ok(())
 }
 
-const MAX_N: Index = 1024 * 1024;
-const DIV: usize = 8;
-const LOOP: usize = 10;
-
-fn run_append_seqfile(dir: &PathBuf, id: &str) -> Result<()> {
-  println!("[seqfile::append::series]");
-  let mut tf = Builder::new().prefix(".tmp-seqfile-append").suffix(".db").tempfile_in(dir).unwrap();
-  let mut report = stat::Report::new();
-  for n in (0..=MAX_N).step_by((MAX_N / DIV as u64).try_into().unwrap()) {
-    for _ in 0..LOOP {
-      // setup
-      tf.as_file().set_len(0)?;
-
-      // run
-      let t0 = Instant::now();
-      seqfile::append(tf.as_file_mut(), n as u32).unwrap();
-      let t1 = Instant::now();
-
-      report.add(n, t1 - t0);
-    }
-    let size = tf.as_file().metadata()?.len();
-    let s = report.single(n);
-    println!("  n={n}: {s}; {size} bytes");
-  }
-
-  // write report
-  let path = dir.join(format!("{id}-seqfile-append.csv"));
-  report.save_to_csv(&path)?;
-  println!("==> {}", path.to_string_lossy());
-  Ok(())
+pub enum Scale {
+  Linear,
+  Log,
+  BestCase,
+  WorstCase,
 }
 
-fn run_append_slate(dir: &PathBuf, id: &str) -> Result<()> {
-  println!("[slate::append::hash-tree]");
-  let tf = Builder::new().prefix(".tmp-slate-append").suffix(".db").tempfile_in(dir).unwrap();
-  let mut report = stat::Report::new();
-  for n in (0..=MAX_N).step_by((MAX_N / DIV as u64).try_into().unwrap()) {
-    for _ in 0..LOOP {
-      // setup
-      tf.as_file().set_len(0)?;
-      let storage = BlockStorage::from_file(tf.path(), false)?;
-      let mut slate = Slate::new(storage)?;
+pub struct Experiment {
+  session: String,
+  dir: PathBuf,
+  dir_report: PathBuf,
 
-      // run
-      let t0 = Instant::now();
-      slate::append(&mut slate, n as u32).unwrap();
-      let t1 = Instant::now();
-
-      report.add(n, t1 - t0);
-    }
-    let size = tf.as_file().metadata()?.len();
-    let s = report.single(n);
-    println!("  n={n}: {s}; {size} bytes");
-  }
-
-  // write report
-  let path = dir.join(format!("{id}-slate-append.csv"));
-  report.save_to_csv(&path)?;
-  println!("==> {}", path.to_string_lossy());
-  Ok(())
+  stability_threshold: f64, // 例: 0.10 (=10%)
+  min_trials: usize,        // 例: 5
+  max_trials: usize,        // 例: 100
+  max_duration: Duration,   // 例: Duration::from_secs(30),
 }
 
-fn run_append_rocksdb(dir: &PathBuf, id: &str) -> Result<()> {
-  use ::rocksdb::{DB, Options};
+pub struct Case {
+  pub id: String,
+  pub name: String,
+  pub dir_work: PathBuf,
+  pub dir_report: PathBuf,
+  pub min_n: Index,
+  pub max_n: Index,
+  scale: Scale,
+  division: usize,
+  persistent: bool,
+  stability_threshold: f64, // 例: 0.10 (=10%)
+  min_trials: usize,        // 例: 5
+  max_trials: usize,        // 例: 100
+  max_duration: Duration,   // 例: Duration::from_secs(30),
+}
 
-  println!("[rocksdb::append::series]");
-  let mut report = stat::Report::new();
-  for n in (0..=MAX_N).step_by((MAX_N / DIV as u64).try_into().unwrap()) {
-    let mut size = 0;
-    for _ in 0..LOOP {
-      // setup
-      let tf = Builder::new().prefix(".tmp-rocksdb-append").tempdir_in(dir).unwrap();
-      let mut opts = Options::default();
-      opts.create_if_missing(true);
-      remove_dir_all(tf.path())?;
-      let db = DB::open(&opts, tf.path()).unwrap();
+impl Experiment {
+  pub fn new(dir: &Path) -> Result<Self> {
+    let session = Local::now().format("%Y%m%d%H%M%S").to_string();
+    let dir = dir.to_path_buf();
+    let dir_report = current_dir()?;
 
-      // run
-      let t0 = Instant::now();
-      rocksdb::append(&db, n as u32).unwrap();
-      let t1 = Instant::now();
-
-      size = file_size(tf.path());
-      report.add(n, t1 - t0);
+    if !dir.exists() {
+      create_dir_all(&dir)?;
     }
-    let s = report.single(n);
-    println!("  n={n}: {s}; {size} bytes");
+    if !dir_report.exists() {
+      create_dir_all(&dir)?;
+    }
+
+    let stability_threshold = 0.10;
+    let min_trials = 5;
+    let max_trials = 100;
+    let max_duration = Duration::from_secs(10 * 60);
+    Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
   }
 
-  // write report
-  let path = dir.join(format!("{id}-locksdb-append.csv"));
-  report.save_to_csv(&path)?;
-  println!("==> {}", path.to_string_lossy());
-  Ok(())
+  pub fn case(&self, id: &str, persistent: bool) -> Result<Case> {
+    let id = id.to_string();
+    let name = format!("{}-{id}", self.session);
+    let dir_work = self.dir.join(format!("slate_banchmark-{}", if persistent { "persistent" } else { &name }));
+    let dir_report = self.dir_report.clone();
+    let min_n = 1;
+    let max_n = 128 * 1024 * 1024;
+    let scale = Scale::Linear;
+    let division = 100;
+
+    if !dir_work.exists() {
+      create_dir_all(&dir_work)?;
+    }
+
+    let stability_threshold = self.stability_threshold;
+    let min_trials = self.min_trials;
+    let max_trials = self.max_trials;
+    let max_duration = self.max_duration;
+    Ok(Case {
+      id,
+      name,
+      dir_work,
+      dir_report,
+      persistent,
+      min_n,
+      max_n,
+      scale,
+      division,
+      stability_threshold,
+      min_trials,
+      max_trials,
+      max_duration,
+    })
+  }
+}
+
+macro_rules! property_decl {
+  ($name:ident, $type:ident) => {
+    pub fn $name(mut self, $name: $type) -> Self {
+      self.$name = $name;
+      self
+    }
+  };
+}
+
+impl Case {
+  property_decl!(min_n, Index);
+  property_decl!(max_n, Index);
+  property_decl!(division, usize);
+  property_decl!(scale, Scale);
+  property_decl!(stability_threshold, f64);
+  property_decl!(min_trials, usize);
+  property_decl!(max_trials, usize);
+  property_decl!(max_duration, Duration);
+
+  pub fn file(&self, filename: &str) -> PathBuf {
+    self.dir_work.join(filename)
+  }
+
+  fn gauge(&self) -> Vec<u64> {
+    match self.scale {
+      Scale::Linear => linspace(self.min_n, self.max_n, self.division),
+      Scale::Log => logspace(self.min_n, self.max_n, self.division),
+      Scale::BestCase => {
+        let (ll, _) = entry_access_distance_limits(self.max_n);
+        ll.into_iter()
+          .enumerate()
+          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
+          .collect::<Vec<_>>()
+      }
+      Scale::WorstCase => {
+        let (_, ul) = entry_access_distance_limits(self.max_n);
+        ul.into_iter()
+          .enumerate()
+          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
+          .collect::<Vec<_>>()
+      }
+    }
+  }
+
+  /// データ量に対する追記時間を計測します。
+  pub fn measure_the_append_time_relative_to_the_amount_of_data<T, D>(&self, mut driver: D) -> Result<()>
+  where
+    D: Driver<T, Duration>,
+  {
+    println!("[{}]", self.id);
+    let mut report = stat::Report::new(stat::Unit::Milliseconds);
+    let gauge = self.gauge();
+    for (i, n) in gauge.iter().enumerate() {
+      self.prepare()?;
+      eprint!("  [{}/{}] n={n}: ", i + 1, self.division);
+      let mut size = 0;
+      let results = self.measure_until_stable(&mut || {
+        let mut target = driver.setup(self)?;
+        let elapse = driver.run(self, &mut target, *n)?;
+        size = cmp::max(size, data_size(&self.dir_work));
+        driver.cleanup(self, target)?;
+        Ok(elapse.as_nanos() as f64 / 1000.0 / 1000.0)
+      })?;
+      let stat = report.append(n, results);
+      eprintln!("{stat}; {size} bytes");
+      self.cleanup()?;
+    }
+
+    // write report
+    let path = self.dir_report.join(format!("{}.csv", self.name));
+    report.save_xy_to_csv(&path, "N", "TIME")?;
+    println!("==> The results have been saved in: {}", path.to_string_lossy());
+    Ok(())
+  }
+
+  /// アクセス位置に対するデータ取得時間を計測します。
+  fn measure_the_data_retrieval_time_relative_to_the_access_location<T, D>(&self, mut driver: D) -> Result<()>
+  where
+    D: Driver<T, Duration>,
+  {
+    println!("[{}]", self.id);
+    let mut target = driver.setup(self)?;
+
+    let mut rng = rand::rng();
+    let mut report = stat::Report::new(stat::Unit::Milliseconds);
+    let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
+    for count in 0..self.max_trials {
+      if count >= 2 {
+        let relative = report.max_relative();
+        if !relative.is_nan() && relative <= self.stability_threshold {
+          break;
+        }
+      }
+
+      gauge.shuffle(&mut rng);
+      for i in gauge.iter().cloned() {
+        let elapse = driver.run(self, &mut target, i)?;
+        report.add(self.max_n - i + 1, elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+      }
+      if count % 100 == 99 {
+        println!("  [{}/{}] n={}: {:.3}", count + 1, self.max_trials, self.max_n, report.max_relative());
+      }
+    }
+    driver.cleanup(self, target)?;
+
+    // write report
+    let path = self.dir_report.join(format!("{}.csv", self.name));
+    report.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
+    println!("==> The results have been saved in: {}", path.to_string_lossy());
+    Ok(())
+  }
+
+  // データ量に対するストレージ容量を計測します。
+  fn measure_the_storage_size_relative_to_the_amount_of_data<T, D>(&self, mut driver: D) -> Result<()>
+  where
+    D: Driver<T, u64>,
+  {
+    println!("[{}]", self.id);
+    let mut report = stat::Report::new(stat::Unit::Bytes);
+    let mut target = driver.setup(self)?;
+    let gauge = self.gauge();
+    for (i, n) in gauge.iter().enumerate() {
+      eprint!("  [{}/{}] n={n}: ", i + 1, self.division);
+      let size = driver.run(self, &mut target, *n)?;
+      let stat = report.add(n, size);
+      eprintln!("{stat}");
+    }
+    driver.cleanup(self, target)?;
+
+    // write report
+    let path = self.dir_report.join(format!("{}.csv", self.name));
+    report.save_xy_to_csv(&path, "N", "SIZE")?;
+    println!("==> The results have been saved in: {}", path.to_string_lossy());
+    Ok(())
+  }
+
+  /// 関数 `f` によって計測された値が所定の安定指針を満たすまで繰り返します。
+  ///
+  /// ## Parameters
+  ///
+  /// - `stability_threshold` - 計測値の ±2σ (信頼区間として約 95.45%) が平均の何 % に収める必要があるか。
+  /// - `min_trials` - 最低試行回数
+  /// - `max_trials` - 最大試行回数
+  /// - `max_duration` - 計測時間限界
+  ///
+  fn measure_until_stable<F, T>(&self, f: &mut F) -> Result<Vec<T>>
+  where
+    F: FnMut() -> Result<T>,
+    T: Copy + IntoFloat,
+  {
+    let mut results = Vec::new();
+    let start = Instant::now();
+    while results.len() < self.min_trials
+      || (results.len() < self.max_trials
+        && start.elapsed() < self.max_duration
+        && Stat::from_vec(stat::Unit::Bytes /* 何でもよい */, &results).relative() > self.stability_threshold)
+    {
+      results.push(f()?);
+    }
+    Ok(results)
+  }
+
+  fn prepare(&self) -> Result<()> {
+    if !self.persistent {
+      if self.dir_work.exists() {
+        fs::remove_dir_all(&self.dir_work)?;
+      }
+      fs::create_dir_all(&self.dir_work)?;
+    }
+    Ok(())
+  }
+  fn cleanup(&self) -> Result<()> {
+    if !self.persistent {
+      fs::remove_dir_all(&self.dir_work)?;
+    }
+    Ok(())
+  }
+}
+
+pub trait Driver<T, V> {
+  fn setup(&mut self, case: &Case) -> Result<T>;
+  fn run(&mut self, case: &Case, db: &mut T, param: u64) -> Result<V>;
+  fn cleanup(&mut self, _case: &Case, _db: T) -> Result<()> {
+    Ok(())
+  }
+}
+
+pub trait IntoFloat: Copy {
+  fn into_f64(self) -> f64;
+}
+
+impl IntoFloat for u64 {
+  fn into_f64(self) -> f64 {
+    self as f64
+  }
+}
+
+impl IntoFloat for f64 {
+  fn into_f64(self) -> f64 {
+    self
+  }
+}
+
+fn linspace(min: u64, max: u64, n: usize) -> Vec<u64> {
+  assert!(n > 1);
+  let step = (max - min) as f64 / (n - 1) as f64;
+  (0..n)
+    .map(|i| {
+      let val = min as f64 + step * i as f64;
+      val.round() as u64
+    })
+    .collect()
+}
+
+fn logspace(min: u64, max: u64, n: usize) -> Vec<u64> {
+  assert!(min > 0, "min must be positive for logspace");
+  assert!(n > 1);
+  let log_min = (min as f64).ln();
+  let log_max = (max as f64).ln();
+  let step = (log_max - log_min) / (n - 1) as f64;
+  (0..n)
+    .map(|i| {
+      let val = (log_min + step * i as f64).exp();
+      val.round() as u64
+    })
+    .collect()
+}
+
+fn data_size(path: &Path) -> u64 {
+  if path.is_dir() {
+    fs::read_dir(path).unwrap().map(|f| data_size(&f.unwrap().path())).sum::<u64>()
+  } else if path.is_file() {
+    path.metadata().unwrap().len()
+  } else {
+    0
+  }
+}
+
+pub fn splitmix64(x: u64) -> u64 {
+  let mut z = x;
+  z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+  z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+  z ^ (z >> 31)
 }

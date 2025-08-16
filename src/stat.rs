@@ -1,3 +1,4 @@
+use crate::IntoFloat;
 use core::f64;
 use slate::Result;
 use std::collections::HashMap;
@@ -5,10 +6,10 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Stat {
+  unit: Unit,
   pub count: usize,
   pub mean: f64,
   pub median: f64,
@@ -18,14 +19,27 @@ pub struct Stat {
 }
 
 impl Stat {
-  pub fn from_vec(mut data: Vec<f64>) -> Stat {
+  pub fn relative(&self) -> f64 {
+    2.0 * self.std_dev / self.mean
+  }
+
+  pub fn from_vec<T: IntoFloat>(unit: Unit, data: &[T]) -> Stat {
     if data.is_empty() {
-      return Stat { count: 0, mean: f64::NAN, median: f64::NAN, std_dev: f64::NAN, min: f64::NAN, max: f64::NAN };
+      return Stat {
+        unit,
+        count: 0,
+        mean: f64::NAN,
+        median: f64::NAN,
+        std_dev: f64::NAN,
+        min: f64::NAN,
+        max: f64::NAN,
+      };
     }
+    let mut data = data.iter().map(|y| y.into_f64()).collect::<Vec<_>>();
     let count = data.len();
     let min = *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
     let max = *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-    let sum = data.iter().sum::<f64>();
+    let sum = data.iter().map(|y| y.into_f64()).sum::<f64>();
     let mean = sum / count as f64;
     data.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = if count % 2 == 0 {
@@ -43,7 +57,7 @@ impl Stat {
       .sum::<f64>()
       / count as f64;
     let std_dev = variance.sqrt();
-    Stat { count, mean, median, std_dev, min, max }
+    Stat { unit, count, mean, median, std_dev, min, max }
   }
 }
 
@@ -52,31 +66,70 @@ impl Display for Stat {
     // 2σ (equivalent to 95.4% confidence interval) calculated as a percentage
     let two_sigma_percent = if self.mean > 0.0 { (2.0 * self.std_dev / self.mean) * 100.0 } else { 0.0 };
     f.write_fmt(format_args!(
-      "{}: {:.2}ms ±{:.1}% [{:.1}|{:.1}|{:.1}]",
-      self.count, self.mean, two_sigma_percent, self.min, self.median, self.max
+      "{}: {} ±{:.1}% [{}|{}|{}]",
+      self.count,
+      self.unit.format(self.mean),
+      two_sigma_percent,
+      self.unit.short(self.min),
+      self.unit.short(self.median),
+      self.unit.short(self.max)
     ))?;
     Ok(())
   }
 }
 
-pub struct Report<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord> {
-  data_set: HashMap<X, Vec<f64>>,
+#[derive(Debug, Clone, Copy)]
+pub enum Unit {
+  Bytes,
+  Milliseconds,
 }
 
-impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord> Report<X> {
-  pub fn new() -> Self {
-    Report { data_set: HashMap::new() }
+impl Unit {
+  fn scaled_format(mut value: f64, scale: usize, unit: &str, auxs: &[&str], precision: usize) -> String {
+    let mut unit_index = 0;
+    while value >= scale as f64 && unit_index + 1 < auxs.len() {
+      value /= scale as f64;
+      unit_index += 1;
+    }
+    format!("{:.precision$}{}{}", value, auxs[unit_index], unit, precision = precision)
   }
-  pub fn add(&mut self, x: X, y: Duration) {
-    self.data_set.entry(x).or_default().push(y.as_micros() as f64 / 1000.0);
+  fn format(&self, value: f64) -> String {
+    match self {
+      Self::Bytes => Self::scaled_format(value, 1024, "B", &["", "k", "M", "G", "T", "P"], 2),
+      Self::Milliseconds => Self::scaled_format(value * 1000.0 * 1000.0, 1000, "s", &["n", "μ", "m", ""], 2),
+    }
   }
-  pub fn single(&self, x: X) -> Stat {
-    self.calc().get(&x).unwrap().clone()
+  fn short(&self, value: f64) -> String {
+    match self {
+      Self::Bytes => Self::scaled_format(value, 1024, "", &["", "k", "M", "G", "T", "P"], 0),
+      Self::Milliseconds => Self::scaled_format(value * 1000.0 * 1000.0, 1000, "", &["n", "μ", "m", ""], 0),
+    }
   }
-  pub fn save_to_csv(&self, path: &PathBuf) -> Result<()> {
+}
+
+pub struct Report<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> {
+  unit: Unit,
+  data_set: HashMap<X, Vec<Y>>,
+}
+
+impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> Report<X, Y> {
+  pub fn new(unit: Unit) -> Self {
+    Report { unit, data_set: HashMap::new() }
+  }
+
+  pub fn add(&mut self, x: X, y: Y) -> Stat {
+    self.append(x, vec![y])
+  }
+
+  pub fn append(&mut self, x: X, mut ys: Vec<Y>) -> Stat {
+    self.data_set.entry(x).or_default().append(&mut ys);
+    self.calculate_statistics_for(x).unwrap()
+  }
+
+  pub fn save_to_csv(&self, path: &PathBuf, x_label: &str) -> Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    writeln!(writer, "N,COUNT,MEAN,MEDIAN,STDDEV,MIN,MAX")?;
+    writeln!(writer, "{x_label},COUNT,MEAN,MEDIAN,STDDEV,MIN,MAX")?;
 
     let ss = self.calc();
     let mut xs = ss.keys().copied().collect::<Vec<_>>();
@@ -93,14 +146,52 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord> Report<X> {
     writer.flush()?;
     Ok(())
   }
+
+  pub fn save_xy_to_csv(&self, path: &PathBuf, x_label: &str, y_labels: &str) -> Result<()> {
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    writeln!(writer, "{x_label},{y_labels}")?;
+
+    let mut xs = self.data_set.keys().copied().collect::<Vec<_>>();
+    xs.sort_unstable();
+    for x in xs.iter() {
+      let ys = self.data_set.get(x).unwrap().iter().map(|f| format!("{f}")).collect::<Vec<_>>();
+      writeln!(writer, "{},{}", x, ys.join(","))?;
+    }
+
+    writer.flush()?;
+    Ok(())
+  }
+
+  pub fn max_relative(&self) -> f64 {
+    if self.data_set.is_empty() {
+      return f64::NAN;
+    }
+    let mut max = 0.0;
+    for x in self.data_set.keys() {
+      let r = self.calculate_statistics_for(*x).unwrap().relative();
+      if r.is_nan() || r.is_infinite() {
+        return r;
+      }
+      if r > max {
+        max = r;
+      }
+    }
+    max
+  }
+
   fn calc(&self) -> HashMap<X, Stat> {
     self
       .data_set
       .iter()
       .map(|(x, ys)| {
-        let s = Stat::from_vec(ys.clone());
+        let s = Stat::from_vec(self.unit, ys);
         (*x, s)
       })
       .collect()
+  }
+
+  fn calculate_statistics_for(&self, x: X) -> Option<Stat> {
+    self.data_set.get(&x).map(|ys| Stat::from_vec(self.unit, ys))
   }
 }

@@ -1,20 +1,42 @@
 use slate::Result;
-use slate_benchmark::u64_to_rand_bytes;
-use std::fs::File;
+use std::fs::{File, OpenOptions, remove_file};
 use std::io::Write;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-#[inline(never)]
-fn single_append(file: &mut File, buffer: &[u8]) -> Result<()> {
-  file.write_all(buffer)?;
-  Ok(file.flush()?)
+use crate::{Case, Driver, splitmix64};
+
+pub struct AppendDriver {
+  path: Option<PathBuf>,
 }
-
-#[inline(never)]
-pub fn append(file: &mut File, n: u32) -> Result<()> {
-  let mut buffer = [0u8; 8];
-  for i in 0u32..n {
-    u64_to_rand_bytes(i as u64, &mut buffer);
-    single_append(file, &buffer).unwrap();
+impl AppendDriver {
+  pub fn new() -> Self {
+    AppendDriver { path: None }
   }
-  Ok(())
+}
+impl Driver<File, Duration> for AppendDriver {
+  fn setup(&mut self, case: &Case) -> Result<File> {
+    let path = case.file("seqfile.db");
+    self.path = Some(path.clone());
+    Ok(OpenOptions::new().create_new(true).write(true).open(&path)?)
+  }
+
+  #[inline(never)]
+  fn run(&mut self, _case: &Case, file: &mut File, n: u64) -> Result<Duration> {
+    let start = Instant::now();
+    for i in 1..=n {
+      file.write_all(&splitmix64(i).to_le_bytes())?;
+    }
+    let elapse = start.elapsed();
+    Ok(elapse)
+  }
+
+  fn cleanup(&mut self, _case: &Case, file: File) -> Result<()> {
+    drop(file);
+    if let Some(path) = &self.path {
+      remove_file(path)?;
+    }
+    self.path = None;
+    Ok(())
+  }
 }
