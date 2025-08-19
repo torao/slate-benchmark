@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::{remove_dir_all, remove_file};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -8,42 +7,10 @@ use rocksdb::{DB, DBCompressionType, Options};
 use slate::file::FileDevice;
 use slate::memory::MemoryDevice;
 use slate::rocksdb::RocksDBStorage;
-use slate::{BlockStorage, Entry, FileStorage, Index, Position, Result, Slate, Storage};
+use slate::{BlockStorage, Entry, Index, Result, Slate, Storage};
+use slate_benchmark::{MemKVS, splitmix64};
 
-use crate::{Case, Driver, splitmix64};
-
-pub struct MemKVS {
-  kvs: Arc<RwLock<HashMap<Position, Entry>>>,
-}
-
-struct MemKVSReader {
-  kvs: Arc<RwLock<HashMap<Position, Entry>>>,
-}
-
-impl Storage<Entry> for MemKVS {
-  fn boot(&mut self) -> Result<(Option<Entry>, slate::Position)> {
-    let lock = self.kvs.read()?;
-    let n = lock.len() as Position;
-    if n == 0 { Ok((None, 1)) } else { Ok((lock.get(&(n + 1)).cloned(), n + 1)) }
-  }
-
-  fn put(&mut self, position: Position, data: &Entry) -> Result<slate::Position> {
-    let mut lock = self.kvs.write()?;
-    lock.insert(position, data.clone());
-    Ok(lock.len() as Position + 1)
-  }
-
-  fn reader(&self) -> Result<Box<dyn slate::Reader<Entry>>> {
-    Ok(Box::new(MemKVSReader { kvs: self.kvs.clone() }))
-  }
-}
-
-impl slate::Reader<Entry> for MemKVSReader {
-  fn read(&mut self, position: Position) -> Result<Entry> {
-    let lock = self.kvs.read()?;
-    Ok(lock.get(&position).cloned().unwrap())
-  }
-}
+use crate::{Case, Driver};
 
 pub struct MemoryAppendDriver {}
 impl MemoryAppendDriver {
@@ -145,16 +112,15 @@ impl MemKVSQueryDriver {
     Self {}
   }
 }
-impl Driver<Slate<MemKVS>, Duration> for MemKVSQueryDriver {
-  fn setup(&mut self, case: &Case) -> Result<Slate<MemKVS>> {
-    let kvs = Arc::new(RwLock::new(HashMap::new()));
-    let storage = MemKVS { kvs };
+impl Driver<Slate<MemKVS<Entry>>, Duration> for MemKVSQueryDriver {
+  fn setup(&mut self, case: &Case) -> Result<Slate<MemKVS<Entry>>> {
+    let storage = MemKVS::new();
     let mut db = Slate::new(storage)?;
     ensure(&mut db, case.max_n)?;
     assert_eq!(case.max_n, db.n());
     Ok(db)
   }
-  fn run(&mut self, case: &Case, db: &mut Slate<MemKVS>, i: u64) -> Result<Duration> {
+  fn run(&mut self, case: &Case, db: &mut Slate<MemKVS<Entry>>, i: u64) -> Result<Duration> {
     run_query(case, db, i)
   }
 }
@@ -212,7 +178,7 @@ impl Driver<Slate<RocksDBStorage>, Duration> for RocksDBQueryDriver {
   fn run(&mut self, case: &Case, db: &mut Slate<RocksDBStorage>, i: u64) -> Result<Duration> {
     run_query(case, db, i)
   }
-  fn cleanup(&mut self, _case: &Case, db: Slate<RocksDBStorage>) -> Result<()> {
+  fn cleanup(&mut self, _case: &Case, _db: Slate<RocksDBStorage>) -> Result<()> {
     self.dir = None;
     Ok(())
   }

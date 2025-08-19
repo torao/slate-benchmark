@@ -64,7 +64,7 @@ def main():
   ks = np.arange(1, N + 1, dtype=np.int64)
   ds = [entry_access_distance(k, N) for k in ks]
 
-  FONT = "Neue Haas Grotesk Text Pro"
+  FONT = "Neue Haas Grotesk Display Pro"
   plt.figure(figsize=(6, 4))
   plt.scatter(ks, ds, marker='o', facecolors='none', edgecolors='#A0C4FF', s=10)
 

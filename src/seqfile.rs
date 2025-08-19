@@ -1,10 +1,11 @@
 use slate::Result;
+use slate_benchmark::splitmix64;
 use std::fs::{File, OpenOptions, remove_file};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::{Case, Driver, splitmix64};
+use crate::{Case, Driver};
 
 pub struct AppendDriver {
   path: Option<PathBuf>,

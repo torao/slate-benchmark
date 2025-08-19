@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::stat::Stat;
 
+mod binarytree;
 mod seqfile;
 mod slate;
 mod stat;
@@ -84,6 +85,16 @@ fn main() -> Result<()> {
       .max_trials(500)
       .stability_threshold(0.5)
       .measure_the_data_retrieval_time_relative_to_the_access_location(slate::RocksDBQueryDriver::new())?;
+
+    experiment
+      .case("query-hashtree-file", false)?
+      .max_n(1024 * 1024)
+      .division(100)
+      .scale(Scale::Log)
+      .min_trials(5)
+      .max_trials(500)
+      .stability_threshold(0.5)
+      .measure_the_data_retrieval_time_relative_to_the_access_location(binarytree::BinTreeQueryDiver::new())?;
   }
 
   #[cfg(false)]
@@ -315,7 +326,7 @@ impl Case {
     let mut report = stat::Report::new(stat::Unit::Milliseconds);
     let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
     for count in 0..self.max_trials {
-      if count >= 2 {
+      if count >= cmp::max(2, self.min_trials) {
         let relative = report.max_relative();
         if !relative.is_nan() && relative <= self.stability_threshold {
           break;
@@ -464,11 +475,4 @@ fn data_size(path: &Path) -> u64 {
   } else {
     0
   }
-}
-
-pub fn splitmix64(x: u64) -> u64 {
-  let mut z = x;
-  z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-  z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-  z ^ (z >> 31)
 }

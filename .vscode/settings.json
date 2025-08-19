@@ -1,0 +1,13 @@
+{
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.tabSize": 2,
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false,
+  },
+  "black-formatter.args": [
+    "--line-length=120",
+    "--indent-size=2"
+  ]
+}

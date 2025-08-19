@@ -26,7 +26,7 @@ import matplotlib.colors as mcolors
 import argparse
 from pathlib import Path
 
-FONT = "Neue Haas Grotesk Text Pro"
+FONT = "Neue Haas Grotesk Display Pro"
 
 
 def read_csv_data(filepath):
@@ -88,7 +88,7 @@ def plot_multiple_files(file_args, args):
     plt.figure(figsize=(10, 6))
     
     # 色のリスト
-    colors = ['#023E8A', '#812D3A', '#E3B935', '#005955', 'blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
+    colors = ['#023E8A', '#812D3A', '#E3B935', '#005955', '#A70092', 'blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
 
     # マーカーのリスト
     markers = ['o', '^', 's', 'x', 'P', '*', '+']
