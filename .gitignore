@@ -1,4 +1,7 @@
+/rust/target
 /target
 .tmp*
 *.gz
 *.csv
+*.png
+iavl

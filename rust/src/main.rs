@@ -3,8 +3,8 @@ use ::slate::{Index, Result};
 use chrono::Local;
 use clap::Parser;
 use rand::seq::SliceRandom;
+use slate_benchmark::file_size;
 use std::cmp;
-use std::env::current_dir;
 use std::fs::{self, create_dir_all};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -19,11 +19,23 @@ mod stat;
 
 #[derive(Parser)]
 #[command(name = "slate-bench")]
-#[command(about = "Benchmark file operations with configurable output directory")]
+#[command(author, version, about = "Benchmark file operations with configurable output directory")]
 struct Args {
+  #[arg(default_value_t = 256u64)]
+  data_size: u64,
+
   /// Output directory for benchmark results and working temporary files
-  #[arg(index = 1, default_value_t = std::env::temp_dir().to_string_lossy().into_owned())]
+  #[arg(short, long, default_value_t = std::env::temp_dir().to_string_lossy().into_owned())]
   dir: String,
+
+  #[arg(short, long, default_value_t = {std::env::current_dir().unwrap().to_string_lossy().into_owned()})]
+  output: String,
+
+  #[arg(short, long, default_value_t = Local::now().format("%Y%m%d%H%M%S").to_string())]
+  session: String,
+
+  #[arg(short, long, default_value_t = false)]
+  clean: bool,
 }
 
 fn main() -> Result<()> {
@@ -34,23 +46,39 @@ fn main() -> Result<()> {
   create_dir_all(&root)?;
   println!("Working directory: {:?}", &root);
 
-  let experiment = Experiment::new(&root)?;
+  let experiment = Experiment::new(&args)?;
+
+  if args.clean {
+    experiment.clean()?;
+    return Ok(());
+  }
+
+  #[cfg(true)]
+  {
+    experiment
+      .case("volume-slate-file", &args, false)?
+      .min_n(0)
+      .max_n(args.data_size)
+      .division(25)
+      .min_trials(1)
+      .max_trials(1)
+      .measure_the_storage_size_relative_to_the_amount_of_data(slate::FileVolumeDriver::new())?;
+
+    experiment
+      .case("volume-slate-rocksdb", &args, false)?
+      .min_n(0)
+      .max_n(args.data_size)
+      .division(25)
+      .min_trials(1)
+      .max_trials(1)
+      .measure_the_storage_size_relative_to_the_amount_of_data(slate::RocksDBVolumeDriver::new())?;
+  }
 
   #[cfg(false)]
   experiment
-    .case("volume-slate-file", true)?
-    .min_n(0)
-    .max_n(128 * 1024 * 1024)
-    .division(25)
-    .min_trials(1)
-    .max_trials(1)
-    .measure_the_storage_size_relative_to_the_amount_of_data(FileVolumeDriver::new())?;
-
-  #[cfg(false)]
-  experiment
-    .case("query-slate-file-large", true)?
+    .case("query-slate-file-large", &args, true)?
     .min_n(1)
-    .max_n(128 * 1024 * 1024)
+    .max_n(args.data_size)
     .division(500)
     .scale(Scale::Log)
     .max_trials(100)
@@ -60,8 +88,8 @@ fn main() -> Result<()> {
   #[cfg(true)]
   {
     experiment
-      .case("query-slate-memkvs", false)?
-      .max_n(1024 * 1024)
+      .case("query-slate-memkvs", &args, false)?
+      .max_n(args.data_size)
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
@@ -69,8 +97,8 @@ fn main() -> Result<()> {
       .measure_the_data_retrieval_time_relative_to_the_access_location(slate::MemKVSQueryDriver::new())?;
 
     experiment
-      .case("query-slate-file", false)?
-      .max_n(1024 * 1024)
+      .case("query-slate-file", &args, false)?
+      .max_n(args.data_size)
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
@@ -78,7 +106,7 @@ fn main() -> Result<()> {
       .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileQueryDriver::new())?;
 
     experiment
-      .case("query-slate-rocksdb", false)?
+      .case("query-slate-rocksdb", &args, false)?
       .max_n(1024 * 1024)
       .division(100)
       .scale(Scale::WorstCase)
@@ -87,7 +115,7 @@ fn main() -> Result<()> {
       .measure_the_data_retrieval_time_relative_to_the_access_location(slate::RocksDBQueryDriver::new())?;
 
     experiment
-      .case("query-hashtree-file", false)?
+      .case("query-hashtree-file", &args, false)?
       .max_n(1024 * 1024)
       .division(100)
       .scale(Scale::Log)
@@ -97,47 +125,47 @@ fn main() -> Result<()> {
       .measure_the_data_retrieval_time_relative_to_the_access_location(binarytree::BinTreeQueryDiver::new())?;
   }
 
-  #[cfg(false)]
+  #[cfg(true)]
   {
     experiment
-      .case("append-seqfile-file", false)?
-      .max_n(1024 * 1024)
+      .case("append-seqfile-file", &args, false)?
+      .max_n(args.data_size)
       .division(10)
       .min_trials(2)
       .max_trials(10)
       .measure_the_append_time_relative_to_the_amount_of_data(seqfile::AppendDriver::new())?;
 
     experiment
-      .case("append-slate-memory", false)?
-      .max_n(1024 * 1024)
+      .case("append-slate-memory", &args, false)?
+      .max_n(args.data_size)
       .division(10)
       .min_trials(2)
       .max_trials(10)
       .measure_the_append_time_relative_to_the_amount_of_data(slate::MemoryAppendDriver::new())?;
 
     experiment
-      .case("append-slate-file", false)?
-      .max_n(1024 * 1024)
+      .case("append-slate-file", &args, false)?
+      .max_n(args.data_size)
       .division(10)
       .min_trials(2)
       .max_trials(10)
       .measure_the_append_time_relative_to_the_amount_of_data(slate::FileAppendDriver::new())?;
 
     experiment
-      .case("append-slate-rocksdb", false)?
-      .max_n(1024 * 1024)
+      .case("append-slate-rocksdb", &args, false)?
+      .max_n(args.data_size)
       .division(10)
       .min_trials(2)
       .max_trials(10)
       .measure_the_append_time_relative_to_the_amount_of_data(slate::RocksDBAppendDriver::new())?;
   }
 
-  #[cfg(false)]
+  #[cfg(true)]
   {
     for level in 0..=3 {
       experiment
-        .case(&format!("cache-slate-file-{level}"), true)?
-        .max_n(1024 * 1024)
+        .case(&format!("cache-slate-file-{level}"), &args, true)?
+        .max_n(args.data_size)
         .division(64)
         .scale(Scale::WorstCase)
         .max_trials(1000)
@@ -156,7 +184,7 @@ pub enum Scale {
   WorstCase,
 }
 
-pub struct Experiment {
+struct Experiment {
   session: String,
   dir: PathBuf,
   dir_report: PathBuf,
@@ -184,10 +212,10 @@ pub struct Case {
 }
 
 impl Experiment {
-  pub fn new(dir: &Path) -> Result<Self> {
-    let session = Local::now().format("%Y%m%d%H%M%S").to_string();
-    let dir = dir.to_path_buf();
-    let dir_report = current_dir()?;
+  fn new(args: &Args) -> Result<Self> {
+    let session = args.session.clone();
+    let dir = PathBuf::from(&args.dir);
+    let dir_report = PathBuf::from(&args.output);
 
     if !dir.exists() {
       create_dir_all(&dir)?;
@@ -203,13 +231,13 @@ impl Experiment {
     Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
   }
 
-  pub fn case(&self, id: &str, persistent: bool) -> Result<Case> {
+  pub fn case(&self, id: &str, args: &Args, persistent: bool) -> Result<Case> {
     let id = id.to_string();
     let name = format!("{}-{id}", self.session);
     let dir_work = self.dir.join(format!("slate_banchmark-{}", if persistent { "persistent" } else { &name }));
     let dir_report = self.dir_report.clone();
     let min_n = 1;
-    let max_n = 128 * 1024 * 1024;
+    let max_n = args.data_size;
     let scale = Scale::Linear;
     let division = 100;
 
@@ -236,6 +264,24 @@ impl Experiment {
       max_trials,
       max_duration,
     })
+  }
+
+  fn clean(&self) -> Result<()> {
+    let mut total = 0u64;
+    let mut count = 0;
+    for entry in fs::read_dir(&self.dir)? {
+      let e = entry?;
+      if e.file_type()?.is_dir() && e.file_name().to_str().unwrap().starts_with("slate_banchmark-") {
+        let dir_path = e.path();
+        let size = file_size(&dir_path);
+        println!("Removing: {} ({} bytes)", dir_path.display(), size);
+        fs::remove_dir_all(&dir_path)?;
+        total += size;
+        count += 1;
+      }
+    }
+    eprintln!("{count} files are removed, total {total} bytes");
+    Ok(())
   }
 }
 

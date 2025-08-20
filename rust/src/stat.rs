@@ -126,27 +126,6 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     self.calculate_statistics_for(x).unwrap()
   }
 
-  pub fn save_to_csv(&self, path: &PathBuf, x_label: &str) -> Result<()> {
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    writeln!(writer, "{x_label},COUNT,MEAN,MEDIAN,STDDEV,MIN,MAX")?;
-
-    let ss = self.calc();
-    let mut xs = ss.keys().copied().collect::<Vec<_>>();
-    xs.sort_unstable();
-    for x in xs.iter() {
-      let y = ss.get(x).unwrap();
-      writeln!(
-        writer,
-        "\"{}\",{},{:.3},{:.3},{:.3},{:.3},{:.3}",
-        x, y.count, y.mean, y.median, y.std_dev, y.min, y.max
-      )?;
-    }
-
-    writer.flush()?;
-    Ok(())
-  }
-
   pub fn save_xy_to_csv(&self, path: &PathBuf, x_label: &str, y_labels: &str) -> Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
@@ -178,17 +157,6 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
       }
     }
     max
-  }
-
-  fn calc(&self) -> HashMap<X, Stat> {
-    self
-      .data_set
-      .iter()
-      .map(|(x, ys)| {
-        let s = Stat::from_vec(self.unit, ys);
-        (*x, s)
-      })
-      .collect()
   }
 
   fn calculate_statistics_for(&self, x: X) -> Option<Stat> {

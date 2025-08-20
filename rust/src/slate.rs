@@ -8,7 +8,7 @@ use slate::file::FileDevice;
 use slate::memory::MemoryDevice;
 use slate::rocksdb::RocksDBStorage;
 use slate::{BlockStorage, Entry, Index, Result, Slate, Storage};
-use slate_benchmark::{MemKVS, splitmix64};
+use slate_benchmark::{MemKVS, file_size, splitmix64};
 
 use crate::{Case, Driver};
 
@@ -223,6 +223,37 @@ impl Driver<Slate<BlockStorage<FileDevice>>, u64> for FileVolumeDriver {
       let entry = query.read_entry(n + 1)?.unwrap();
       Ok(entry.root().address.position)
     }
+  }
+}
+
+pub struct RocksDBVolumeDriver {
+  dir: Option<PathBuf>,
+}
+impl RocksDBVolumeDriver {
+  pub fn new() -> Self {
+    Self { dir: None }
+  }
+}
+impl Driver<Slate<RocksDBStorage>, u64> for RocksDBVolumeDriver {
+  fn setup(&mut self, case: &Case) -> Result<Slate<RocksDBStorage>> {
+    let dir = case.file(&format!("slate-rocksdb-{}.db", case.max_n));
+    self.dir = Some(dir.clone());
+
+    let mut opts = Options::default();
+    opts.create_if_missing(true);
+    opts.set_compression_type(DBCompressionType::None);
+    opts.set_compression_per_level(&[DBCompressionType::None; 7]);
+    let db = Arc::new(RwLock::new(DB::open(&opts, &dir).unwrap()));
+    let storage = RocksDBStorage::new(db, &[], false);
+    Slate::new(storage)
+  }
+  #[inline(never)]
+  fn run(&mut self, _case: &Case, db: &mut Slate<RocksDBStorage>, n: u64) -> Result<u64> {
+    ensure(db, n)?;
+    if db.n() > n {
+      panic!("{n} expected, but {}", db.n());
+    }
+    Ok(file_size(&self.dir.clone().unwrap()))
   }
 }
 

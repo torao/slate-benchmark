@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"encoding/csv"
-	"flag"
 	"fmt"
 	"io/fs"
 	"math"
@@ -16,16 +15,16 @@ import (
 
 	"github.com/cosmos/iavl"
 	"github.com/cosmos/iavl/db"
+	"github.com/spf13/cobra"
 )
 
 // ベンチマーク設定
 const (
-	MaxTrials        = 1000        // 最大試行回数
-	MinTrials        = 5           // 最小試行回数
-	StdDevThreshold  = 0.05        // 標準偏差/平均値のしきい値 (5%)
-	MaxDataSize      = 1024 * 1024 // 最大データサイズ
-	AppendDivision   = 10          // Append 測定での分割数
-	QueryDivision    = 100         // Query 測定での分割数
+	MaxTrials        = 1000 // 最大試行回数
+	MinTrials        = 5    // 最小試行回数
+	StdDevThreshold  = 0.05 // 標準偏差/平均値のしきい値 (5%)
+	AppendDivision   = 10   // Append 測定での分割数
+	QueryDivision    = 100  // Query 測定での分割数
 	MaxDuration      = 3 * time.Minute
 	DefaultResultDir = "." // デフォルトの結果出力ディレクトリ
 
@@ -88,12 +87,12 @@ func measureQuery(path string, is []uint64, stats *Stats) {
 }
 
 // Append 性能のベンチマーク
-func benchmarkAppend(config *Config, id string) {
+func benchmarkAppend(config *Config, append_id, volume_id string) {
 	fmt.Println("=== Append Benchmark ===")
 	fmt.Println("DataSize\tMean(ms)\tStdDev(ms)\tCV(%)\t\tTrials")
 	fmt.Println("--------\t--------\t----------\t-----\t\t------")
 
-	ns := linspace(1, MaxDataSize, AppendDivision)
+	ns := linspace(1, config.DataSize, AppendDivision)
 	timeComplexity := NewStats()
 	spaceComplexity := NewStats()
 	for _, n := range ns {
@@ -115,8 +114,8 @@ func benchmarkAppend(config *Config, id string) {
 	}
 	config.RemoveDatabase("iavl")
 
-	timeComplexity.Save(config.ResultFile(fmt.Sprintf("%s_time", id)), "SIZE", "TIME")
-	spaceComplexity.Save(config.ResultFile(fmt.Sprintf("%s_space", id)), "SIZE", "BYTES")
+	timeComplexity.Save(config.ResultFile(append_id), "SIZE", "TIME")
+	spaceComplexity.Save(config.ResultFile(volume_id), "SIZE", "BYTES")
 }
 
 // Query 性能のベンチマーク
@@ -124,14 +123,14 @@ func benchmarkQuery(config *Config, id string) {
 	fmt.Println("\n=== Query Benchmark ===")
 
 	// データベースを作成
-	fmt.Printf("Creating iavl with %d entries...\n", MaxDataSize)
+	fmt.Printf("Creating iavl with %d entries...\n", config.DataSize)
 	config.RemoveDatabase("iavl")
-	measureAppend(config.DatabasePath("iavl"), MaxDataSize, NewStats())
+	measureAppend(config.DatabasePath("iavl"), config.DataSize, NewStats())
 
 	fmt.Println("Position\tMean(μs)\tStdDev(μs)\tCV(%)\t\tTrials")
 	fmt.Println("--------\t--------\t----------\t-----\t\t------")
 
-	is := logspace(1, MaxDataSize, QueryDivision)
+	is := logspace(1, config.DataSize, QueryDivision)
 	rand.Seed(time.Now().UnixNano())
 	timeComplexity := NewStats()
 	start := time.Now()
@@ -146,7 +145,7 @@ func benchmarkQuery(config *Config, id string) {
 			}
 		}
 		if (i+1)%100 == 0 {
-			fmt.Printf("  [%d/%d] n=%d: cv=%.3f\n", i+1, MaxTrials, MaxDataSize, timeComplexity.MaxRelative())
+			fmt.Printf("  [%d/%d] n=%d: cv=%.3f\n", i+1, MaxTrials, config.DataSize, timeComplexity.MaxRelative())
 		}
 	}
 	config.RemoveDatabase("iavl")
@@ -257,6 +256,7 @@ func (s *Stats) Save(path, column1, column2 string) {
 
 // コマンドライン引数
 type Config struct {
+	DataSize  uint64
 	WorkDir   string
 	ResultDir string
 	SessionID string
@@ -278,46 +278,52 @@ func (c *Config) ResultFile(id string) string {
 // コマンドライン引数の解析
 func parseCommandLine() *Config {
 	config := &Config{
-		WorkDir:   os.TempDir(),
-		ResultDir: DefaultResultDir,
-		SessionID: time.Now().Format("20060102150405"),
+		DataSize:  256,
+		WorkDir:   "",
+		ResultDir: "",
+		SessionID: "",
 	}
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [dir] --output [output] --session [session] --clear\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Arguments:\n")
-		fmt.Fprintf(os.Stderr, "  dir             Directory for data input/output (default: %s)\n", os.TempDir())
-		fmt.Fprintf(os.Stderr, "\nOptions:\n")
-		fmt.Fprintf(os.Stderr, "  --output DIR    Directory to save result CSV files (default: %s)\n", config.ResultDir)
-		fmt.Fprintf(os.Stderr, "  --session ID    Session name for result file naming (default: %s)\n", config.SessionID)
-		fmt.Fprintf(os.Stderr, "  --clean         Remove all cached files and exit\n")
-		fmt.Fprintf(os.Stderr, "  --help          Show this help message\n")
+	rootCmd := &cobra.Command{
+		Use:   fmt.Sprintf("%s [data-size]", os.Args[0]),
+		Short: "IAVL+ Performance Benchmark Tool",
+		Long: `IAVL+ Performance Benchmark Tool
+
+  This tool performs comprehensive performance benchmarking of IAVL+ (Immutable
+  AVL+) trees using LevelDB as the persistent storage backend. It measures both
+  time and space complexity for append operations and query performance across
+  different data sizes.
+`,
+		Args: cobra.MaximumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) == 1 {
+				num, err := strconv.ParseUint(args[0], 10, 64)
+				if err != nil {
+					fmt.Printf("変換エラー: %v\n", err)
+					return
+				}
+				config.DataSize = num
+			}
+		},
+	}
+	flags := rootCmd.Flags()
+	workDirFlag := flags.StringP("dir", "d", os.TempDir(), "Database directory used for benchmarking")
+	resultDirFlag := flags.StringP("output", "o", DefaultResultDir, "Directory to save result CSV files")
+	sessionIdFlag := flags.StringP("session", "s", time.Now().Format("20060102150405"), "Session name for result file naming")
+	cleanFlag := flags.BoolP("clean", "c", false, "Remove all cached files and exit")
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
-	flag.StringVar(&config.ResultDir, "output", DefaultResultDir, "Directory to save result CSV files")
-	flag.StringVar(&config.SessionID, "session", time.Now().Format("20060102150405"), "Session name for result file naming")
-	cleanFlag := flag.Bool("clean", false, "Remove all cached files and exit")
-	helpFlag := flag.Bool("help", false, "Show help message")
-
-	flag.Parse()
-
-	if *helpFlag {
-		flag.Usage()
-		os.Exit(0)
-	}
-
-	if flag.NArg() > 1 {
-		panic(fmt.Errorf("too many %d arguments, expected at most one directory path", flag.NArg()))
-	}
-	dir := os.TempDir()
-	if flag.NArg() = 1 {
-		dir = flag.Arg(0)
-	}
-	config.WorkDir = createDirectory(dir)
-	config.ResultDir = createDirectory(config.ResultDir)
+	config.WorkDir = createDirectory(*workDirFlag)
+	config.ResultDir = createDirectory(*resultDirFlag)
+	config.SessionID = *sessionIdFlag
 
 	if *cleanFlag {
 		config.RemoveDatabase("iavl")
+		fmt.Fprintf(os.Stderr, "The databse is deleted: %s\n", config.DatabasePath("iavl"))
 		os.Exit(0)
 	}
 
@@ -422,12 +428,12 @@ func logspace(min, max uint64, n int) []uint64 {
 
 // システム情報の表示
 func printSystemInfo(config *Config) {
-	fmt.Println("=== Ethereum MPT Benchmark (File-based) ===")
+	fmt.Println("=== Cosmos IAVL+ Benchmark (File-based) ===")
 	fmt.Printf("Database type: LevelDB (file-based)\n")
 	fmt.Printf("Working directory: %s\n", config.WorkDir)
 	fmt.Printf("Result directory: %s\n", config.ResultDir)
 	fmt.Printf("Session ID: %s\n", config.SessionID)
-	fmt.Printf("Max data size: %d\n", MaxDataSize)
+	fmt.Printf("Max data size: %d\n", config.DataSize)
 	fmt.Printf("Max trials: %d\n", MaxTrials)
 	fmt.Printf("Min trials: %d\n", MinTrials)
 	fmt.Printf("StdDev threshold: %.1f%%\n", StdDevThreshold*100)
@@ -441,5 +447,5 @@ func main() {
 	config := parseCommandLine()
 	printSystemInfo(config)
 	benchmarkQuery(config, "query-iavl-leveldb")
-	benchmarkAppend(config, "append-iavl-leveldb")
+	benchmarkAppend(config, "append-iavl-leveldb", "volume-iavl-leveldb")
 }

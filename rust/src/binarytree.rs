@@ -1,17 +1,8 @@
-use std::{
-  fmt::Binary,
-  time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use slate::{
-  BlockStorage, Result,
-  file::FileDevice,
-  formula::{ceil_log2, floor_log2},
-};
-use slate_benchmark::{
-  hashtree::{HashTree, binary::BinaryHashTree},
-  splitmix64,
-};
+use slate::{BlockStorage, Result, file::FileDevice, formula::ceil_log2};
+use slate_benchmark::hashtree::{HashTree, binary::BinaryHashTree};
+use slate_benchmark::splitmix64;
 
 use crate::{Case, Driver};
 

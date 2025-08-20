@@ -5,24 +5,21 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
+DATA_SIZE = 256
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 WORK_DIR = "/tmp"
 SESSION_ID = "{{ now() | date(format='%Y%m%d%H%M%S') }}"
+COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
 [tasks.setup]
 description = "Setup all project dependencies"
-depends = ["setup:*"]
-run = [
-  "mkdir -p $RESULTS_DIR",
-  "python -m pip install -r scripts/requirements.txt",
-]
+depends = ["{{ os() }}:setup", "setup:python", "setup:go", "setup:rust"]
 
 [tasks.clean]
 description = "Clean all build artifacts and results"
 depends = ["clean:*"]
 run = [
-  "cargo clean",
   "rm -rf $RESULTS_DIR/*",
   "rm -f *.png",
 ]
@@ -30,61 +27,102 @@ run = [
 [tasks.build]
 depends = ["build:*"]
 
-# --- Go Projects ---
+[tasks.run]
+description = "Run benchmark"
+depends = ["build:*"]
+run = [
+  # When specified as depends, they are executed in parallel, but must be executed sequentially to
+  # measure performance.
+  "{{mise_bin}} --env SESSION_ID=$SESSION_ID run run:go",
+  "{{mise_bin}} --env SESSION_ID=$SESSION_ID run run:rust",
+]
+
+[tasks.fmt]
+description = "Format source"
+depends = ["fmt:*"]
+
+# -- Python ---
+
+[tasks."setup:python"]
+run = [
+  "cd python && python -m pip install -r scripts/requirements.txt",
+]
+
+# --- Golang ---
 
 [tasks."clean:go"]
 description = "Clean Go build artifacts and results"
 run = [
-  "cd iavl && ./iavl --clean && go clean",
+  "cd golang && ./iavl --clean && go mod tidy && go clean",
+]
+
+[tasks."fmt:go"]
+description = "Clean Go build artifacts and results"
+run = [
+  "cd golang && go mod tidy && go fmt", 
 ]
 
 [tasks."setup:go"]
 description = "Setup Go project dependencies"
 run = [
-  "cd iavl && go mod download",
+  "cd golang && go mod download",
 ]
 
 [tasks."build:go"]
 description = "Build benchmark for Go"
 depends = ["setup:go"]
-sources = ["iavl/main.go", "go.mod"]
-outputs = ["iavl/iavl"]
-run = ["cd iavl && go build -trimpath -o iavl main.go"]
+sources = ["golang/main.go", "golang/go.mod"]
+outputs = ["golang/iavl"]
+run = ["cd golang && go build -trimpath -o iavl main.go"]
 
-[tasks."bench:go"]
+[tasks."run:go"]
 description = "Run Go benchmarks"
 depends = ["build:go"]
-run = ["cd iavl && ./iavl \"$WORK_DIR\" --output \"$RESULTS_DIR\" --session \"$SESSION_ID\""]
+run = ["golang/iavl $DATA_VOLUME --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\" --session \"$SESSION_ID\""]
 
 # --- Rust Projects ---
 
-[tasks.build-rust]
+[tasks."setup:rust"]
+
+[tasks."clean:rust"]
+run = [
+  "cd rust && target/release/slate_benchmark --clean && cargo clean",
+]
+
+[tasks."fmt:rust"]
+run = "cd rust && cargo fmt"
+
+[tasks."build:rust"]
 description = "Build benchmark for Rust"
-run = "cargo build --release"
+depends = ["setup:rust"]
+sources = ["rust/src/**/*.rs", "rust/benches/**/*.rs", "rust/Cargo.toml"]
+outputs = ["rust/target/release/slate_benchmark"]
+run = "cd rust && cargo build --release"
 
-[tasks.run]
+[tasks."run:rust"]
 description = "Run benchmark"
-depends = ["build"]
-run = "target\\release\\slate_benchmark.exe"
+depends = ["build:rust", "{{ os_family() }}:run:rust"]
 
-[tasks.fmt]
-description = "Format source"
-run = ["cd iavl && go fmt", "cargo fmt"]
+[tasks."windows:run:rust"]
+run = "rust\\target\\release\\slate_benchmark.exe %DATA_VOLUME% --dir \"%WORK_DIR%\" --output \"%RESULTS_DIR%\" --session \"%SESSION_ID%\""
 
-[tasks.setup-linux]
-depends = ["setup-linux-fonts"]
+[tasks."unix:run:rust"]
+run = "rust/target/release/slate_benchmark $DATA_VOLUME --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\" --session \"$SESSION_ID\""
 
-[tasks.setup-linux-fonts]
-description = "グラフ描画に使用するフォントをインストール"
-run = '''
-echo "🐧 Linux にフォントをインストール中..."
-USER_FONT_DIR="${HOME}/.local/share/fonts"
-mkdir -p $USER_FONT_DIR
-cp scripts/NeueHaasDisplay-Roman.ttf $USER_FONT_DIR
+# --- Environment Dependency ---
 
-echo "🔄 フォントキャッシュを更新中..."
-sudo fc-cache -fv >/dev/null 2>&1
-fc-cache -fv >/dev/null 2>&1
+[tasks."linux:setup"]
+description = "Install fonts used for graph drawing."
+run = [
+  "mkdir -p $RESULTS_DIR",
+  "echo '🐧 Installing fonts on Linux...'",
+  "USER_FONT_DIR=\"${HOME}/.local/share/fonts\"",
+  "mkdir -p $USER_FONT_DIR",
+  "cp scripts/NeueHaasDisplay-Roman.ttf $USER_FONT_DIR",
+  "echo \"🔄 Updating font cache...\"",
+  "sudo fc-cache -fv >/dev/null 2>&1",
+  "fc-cache -fv >/dev/null 2>&1",
+  "echo \"✅ Linux font installation complete: $(fc-list 'Neue Haas Grotesk Display Pro')\"",
+]
 
-echo "✅ Linux フォントインストール完了: $(fc-list 'Neue Haas Grotesk Display Pro')"
-'''
+[tasks."setup:windows"]
