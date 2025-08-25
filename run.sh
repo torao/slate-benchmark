@@ -2,6 +2,7 @@
 set -eu
 
 dir=results
+size=1M
 
 latest_timestamp() {
   find $dir -maxdepth 1 -name "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-$1-*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
@@ -33,7 +34,7 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-append-seqfile-file.csv=Unindexed Sequence File" \
     "$dir/$ts2-append-iavl-leveldb.csv=IAVL+ (leveldb)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" \
-    --title "Append Performance \$(T_{\\rm 1M})\$" \
+    --title "Append Performance \$(T_{\\rm $size})\$" \
     --xlabel "Number of data" \
     --ylabel "Time taken to add all data [msec]"
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" "bench-append.png"
@@ -50,12 +51,12 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-query-hashtree-file.csv=Binary Tree (file)" \
     "$dir/$ts2-query-iavl-leveldb.csv=IAVL+ (leveldb)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-query.png" \
-    --title "Query Performance \$(T_{\\rm 1M})\$" \
+    --title "Query Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
-    --ymin 0 --ymax 0.2 \
+    --ymin 0 --ymax 0.03 \
     --xscale log \
-    --no-errorbars
+    --no-errorbars --no-scatter
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-query.png" "bench-query.png"
 fi
 
@@ -68,10 +69,27 @@ if [ ! -z "$ts" ]; then
     "$dir/$ts-cache-slate-file-2.csv=Level 2" \
     "$dir/$ts-cache-slate-file-3.csv=Level 3" \
     -o "$dir/$ts-cache.png" \
-    --title "Cache Performance (\$T_{\\rm 1M}\$ slate file)" \
+    --title "Cache Performance (\$T_{\\rm $size}\$ slate file)" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
     --xscale log \
     --no-errorbars --no-scatter
   cp "$dir/$ts-cache.png" "bench-cache.png"
+fi
+
+# Prove
+ts1=$(latest_timestamp "prove-slate")
+ts2=$(latest_timestamp "query-iavl")
+if [ ! -z "$ts1" ]; then
+  python3 scripts/scatter-plot2.py \
+    "$dir/$ts1-prove-slate-file.csv=Slate (file)" \
+    "$dir/$ts1-prove-slate-rocksdb.csv=Slate (rocksdb)" \
+    -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" \
+    --title "Proven Performance \$(T_{\\rm $size})\$" \
+    --xlabel "Distance of differences from latest data" \
+    --ylabel "Time taken to prove data [msec]" \
+    --xscale log \
+    --ymin 0 --ymax 0.6 \
+    --no-latex --no-errorbars
+  cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" "bench-prove.png"
 fi

@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"time"
@@ -22,18 +23,17 @@ import (
 const (
 	MaxTrials        = 1000 // 最大試行回数
 	MinTrials        = 5    // 最小試行回数
-	StdDevThreshold  = 0.05 // 標準偏差/平均値のしきい値 (5%)
+	CVThreshold      = 0.05 // 標準偏差/平均値のしきい値 (5%)
 	AppendDivision   = 10   // Append 測定での分割数
 	QueryDivision    = 100  // Query 測定での分割数
-	MaxDuration      = 3 * time.Minute
+	MaxDuration      = 10 * time.Minute
 	DefaultResultDir = "." // デフォルトの結果出力ディレクトリ
-
 )
 
 // 指定されたディレクトリに IAVL を作成します。
-func measureAppend(path string, n uint64, stats *Stats) int64 {
+func measureAppend(path string, n uint64) (time.Duration, int64) {
 
-	// 永続化ストレージ上で新しい IAVL データベースを作成
+	// 永続化ストレージ上で新しい IAVL データベースを作成 (既に存在する場合はロード)
 	leveldb, err := db.NewGoLevelDB("slate", path)
 	if err != nil {
 		panic(fmt.Errorf("failed to create leveldb: %v", err))
@@ -41,26 +41,34 @@ func measureAppend(path string, n uint64, stats *Stats) int64 {
 	defer leveldb.Close()
 	db := iavl.NewMutableTree(leveldb, 0, false, iavl.NewNopLogger())
 	defer db.Close()
+	_, err = db.Load()
+	if err != nil {
+		panic(fmt.Errorf("failed to load tree:", err))
+	}
 
+	runtime.GC()
 	start := time.Now()
-	for i := uint64(1); i <= n; i++ {
+	for uint64(db.Size()) < n {
+		i := uint64(db.Size() + 1)
 		_, err := db.Set(intToKey(i), intToValue(i))
 		if err != nil {
 			panic(fmt.Errorf("failed to update iavl database: %v", err))
 		}
+		db.Hash()
 		_, _, err = db.SaveVersion()
 		if err != nil {
 			panic(fmt.Errorf("failed to version iavl database: %v", err))
 		}
 	}
 	duration := time.Since(start)
-	stats.Add(n, float64(duration.Nanoseconds())/1000.0/1000.0)
 
-	return fileOrDirectorySize(path)
+	db.Close()
+	leveldb.Close()
+	return duration, fileOrDirectorySize(path)
 }
 
-// 既存のルートハッシュから Trie をロードし、値を取得
-func measureQuery(path string, is []uint64, stats *Stats) {
+// 既存のルートハッシュから IAVL をロードし、値を取得
+func measureQuery(path string, is []uint64) map[uint64]time.Duration {
 
 	// 保存された場所から IAVL をロード
 	leveldb, err := db.NewGoLevelDB("slate", path)
@@ -70,20 +78,27 @@ func measureQuery(path string, is []uint64, stats *Stats) {
 	defer leveldb.Close()
 	db := iavl.NewMutableTree(leveldb, 0, false, iavl.NewNopLogger())
 	defer db.Close()
+	_, err = db.Load()
+	if err != nil {
+		panic(fmt.Errorf("failed to load tree:", err))
+	}
 
+	result := make(map[uint64]time.Duration)
 	for _, i := range is {
+		runtime.GC()
 		start := time.Now()
 		bytes, err := db.GetVersioned(intToKey(i), int64(i))
 		if err != nil {
 			panic(err)
 		}
 		duration := time.Since(start)
-		stats.Add(i, float64(duration.Nanoseconds())/1000.0/1000.0)
+		result[i] = duration
 		value := valueToInt(bytes)
 		if value != splitmix64(i) {
 			panic(fmt.Errorf("The value read for i=%d is incorrect: %d != %d", i, splitmix64(i), value))
 		}
 	}
+	return result
 }
 
 // Append 性能のベンチマーク
@@ -95,26 +110,32 @@ func benchmarkAppend(config *Config, append_id, volume_id string) {
 	ns := linspace(1, config.DataSize, AppendDivision)
 	timeComplexity := NewStats()
 	spaceComplexity := NewStats()
-	for _, n := range ns {
-		start := time.Now()
-		for i := 0; i < MaxTrials; i++ {
-			config.RemoveDatabase("iavl")
-			space := measureAppend(config.DatabasePath("iavl"), n, timeComplexity)
-			spaceComplexity.AddLarger(n, float64(space))
-			if i+1 >= MinTrials {
-				mean, stddev, _ := timeComplexity.Calculate(n)
-				if 2*stddev/mean <= StdDevThreshold || time.Since(start) >= MaxDuration {
-					break
-				}
+	start := time.Now()
+	for i := 0; i < MaxTrials; i++ {
+		if i > MinTrials {
+			ns = filterCvSufficient(ns, timeComplexity)
+		}
+		if len(ns) == 0 || time.Since(start) >= MaxDuration {
+			break
+		}
+
+		config.RemoveDatabase("iavl", "append")
+		for _, n := range ns {
+			tm, space := measureAppend(config.DatabasePath("iavl", "append"), n)
+			timeComplexity.Add(n, float64(tm.Nanoseconds())/1000.0/1000.0)
+			if i == 0 {
+				spaceComplexity.AddLarger(n, float64(space))
 			}
 		}
-		mean, stddev, size := timeComplexity.Calculate(n)
-		fmt.Printf("%d\t\t%.2fms\t\t%.2fms\t\t%.2f\t\t%d\n",
-			n, mean, stddev, 2*stddev/mean, size)
+		config.RemoveDatabase("iavl", "append")
+		if i%100 == 99 {
+			mean, stddev, size := timeComplexity.Calculate(config.DataSize)
+			fmt.Printf("%d\t\t%.2fms\t\t%.2fms\t\t%.2f\t\t%d\n",
+				config.DataSize, mean, stddev, stddev/mean, size)
+		}
 	}
-	config.RemoveDatabase("iavl")
 
-	timeComplexity.Save(config.ResultFile(append_id), "SIZE", "TIME")
+	timeComplexity.Save(config.ResultFile(append_id), "SIZE", "MILLISECONDS")
 	spaceComplexity.Save(config.ResultFile(volume_id), "SIZE", "BYTES")
 }
 
@@ -124,8 +145,11 @@ func benchmarkQuery(config *Config, id string) {
 
 	// データベースを作成
 	fmt.Printf("Creating iavl with %d entries...\n", config.DataSize)
-	config.RemoveDatabase("iavl")
-	measureAppend(config.DatabasePath("iavl"), config.DataSize, NewStats())
+	config.RemoveDatabase("iavl", "query")
+	t0 := time.Now()
+	measureAppend(config.DatabasePath("iavl", "query"), config.DataSize)
+	tm := time.Since(t0)
+	fmt.Printf("created: %.3f [msec]\n", float64(tm.Nanoseconds())/1000.0/1000.0)
 
 	fmt.Println("Position\tMean(μs)\tStdDev(μs)\tCV(%)\t\tTrials")
 	fmt.Println("--------\t--------\t----------\t-----\t\t------")
@@ -138,9 +162,12 @@ func benchmarkQuery(config *Config, id string) {
 		rand.Shuffle(len(is), func(i, j int) {
 			is[i], is[j] = is[j], is[i]
 		})
-		measureQuery(config.DatabasePath("iavl"), is, timeComplexity)
+		result := measureQuery(config.DatabasePath("iavl", "query"), is)
+		for j, duration := range result {
+			timeComplexity.Add(j, float64(duration.Nanoseconds())/1000.0/1000.0)
+		}
 		if i+1 >= MinTrials {
-			if timeComplexity.MaxRelative() <= StdDevThreshold || time.Since(start) >= MaxDuration {
+			if timeComplexity.MaxRelative() <= CVThreshold || time.Since(start) >= MaxDuration {
 				break
 			}
 		}
@@ -148,9 +175,19 @@ func benchmarkQuery(config *Config, id string) {
 			fmt.Printf("  [%d/%d] n=%d: cv=%.3f\n", i+1, MaxTrials, config.DataSize, timeComplexity.MaxRelative())
 		}
 	}
-	config.RemoveDatabase("iavl")
+	config.RemoveDatabase("iavl", "query")
 
 	timeComplexity.Save(config.ResultFile(id), "SIZE", "TIME")
+}
+
+func filterCvSufficient(gauge []uint64, s *Stats) []uint64 {
+	var result []uint64
+	for _, i := range gauge {
+		if !s.IsCVSufficient(i, CVThreshold) {
+			result = append(result, i)
+		}
+	}
+	return result
 }
 
 // 統計情報
@@ -209,11 +246,19 @@ func (s *Stats) Calculate(key uint64) (float64, float64, int) {
 	return mean, stddev, len(trials)
 }
 
+func (s *Stats) IsCVSufficient(x uint64, cv float64) bool {
+	mean, stddev, count := s.Calculate(x)
+	if count <= 2 {
+		return false
+	}
+	return stddev/mean < cv
+}
+
 func (s *Stats) MaxRelative() float64 {
 	relative := math.NaN()
-	for key, _ := range s.trials {
-		mean, stddev, _ := s.Calculate(key)
-		r := 2.0 * stddev / mean
+	for x, _ := range s.trials {
+		mean, stddev, _ := s.Calculate(x)
+		r := stddev / mean
 		if math.IsNaN(relative) || r > relative {
 			relative = r
 		}
@@ -262,12 +307,12 @@ type Config struct {
 	SessionID string
 }
 
-func (c *Config) DatabasePath(name string) string {
-	return filepath.Join(c.WorkDir, fmt.Sprintf("slate-benchmark-%s.db", name))
+func (c *Config) DatabasePath(name, task string) string {
+	return filepath.Join(c.WorkDir, fmt.Sprintf("slate_benchmark-%s-%s.db", name, task))
 }
 
-func (c *Config) RemoveDatabase(name string) {
-	path := c.DatabasePath(name)
+func (c *Config) RemoveDatabase(name, task string) {
+	path := c.DatabasePath(name, task)
 	os.RemoveAll(path)
 }
 
@@ -322,8 +367,10 @@ func parseCommandLine() *Config {
 	config.SessionID = *sessionIdFlag
 
 	if *cleanFlag {
-		config.RemoveDatabase("iavl")
-		fmt.Fprintf(os.Stderr, "The databse is deleted: %s\n", config.DatabasePath("iavl"))
+		for _, name := range []string{"query", "append"} {
+			config.RemoveDatabase("iavl", name)
+			fmt.Fprintf(os.Stderr, "The databse is deleted: %s\n", config.DatabasePath("iavl", name))
+		}
 		os.Exit(0)
 	}
 
@@ -344,7 +391,8 @@ func createDirectory(path string) string {
 func fileOrDirectorySize(path string) int64 {
 	info, err := os.Stat(path)
 	if err != nil {
-		panic(fmt.Errorf("cannot access to path: '%s': %v", path, err))
+		fmt.Fprintf(os.Stderr, "cannot access to path: '%s': %v\n", path, err)
+		return 0
 	}
 
 	if !info.IsDir() {
@@ -354,14 +402,15 @@ func fileOrDirectorySize(path string) int64 {
 	var totalSize int64
 	filepath.WalkDir(path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			panic(fmt.Errorf("cannot access to path: '%s': %v", path, err))
-		}
-		if !d.IsDir() {
+			fmt.Fprintf(os.Stderr, "cannot access to path: '%s': %v\n", path, err)
+			return nil
+		} else if !d.IsDir() {
 			info, err := d.Info()
 			if err != nil {
-				panic(fmt.Errorf("cannot access to path: '%s': %v", path, err))
+				fmt.Fprintf(os.Stderr, "cannot access to path: '%s': %v\n", path, err)
+			} else {
+				totalSize += info.Size()
 			}
-			totalSize += info.Size()
 		}
 		return nil
 	})
@@ -436,7 +485,7 @@ func printSystemInfo(config *Config) {
 	fmt.Printf("Max data size: %d\n", config.DataSize)
 	fmt.Printf("Max trials: %d\n", MaxTrials)
 	fmt.Printf("Min trials: %d\n", MinTrials)
-	fmt.Printf("StdDev threshold: %.1f%%\n", StdDevThreshold*100)
+	fmt.Printf("StdDev threshold: %.1f%%\n", CVThreshold*100)
 	fmt.Printf("Data type: 8-byte integers\n")
 	fmt.Printf("Append test divisions: %d\n", AppendDivision)
 	fmt.Printf("Query test divisions: %d\n", QueryDivision)

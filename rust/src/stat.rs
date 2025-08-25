@@ -19,8 +19,9 @@ pub struct Stat {
 }
 
 impl Stat {
-  pub fn relative(&self) -> f64 {
-    2.0 * self.std_dev / self.mean
+  /// calculate StdDev / Mean
+  pub fn cv(&self) -> f64 {
+    self.std_dev / self.mean
   }
 
   pub fn from_vec<T: IntoFloat>(unit: Unit, data: &[T]) -> Stat {
@@ -142,13 +143,13 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     Ok(())
   }
 
-  pub fn max_relative(&self) -> f64 {
+  pub fn max_cv(&self) -> f64 {
     if self.data_set.is_empty() {
       return f64::NAN;
     }
     let mut max = 0.0;
     for x in self.data_set.keys() {
-      let r = self.calculate_statistics_for(*x).unwrap().relative();
+      let r = self.calculate_statistics_for(*x).unwrap().cv();
       if r.is_nan() || r.is_infinite() {
         return r;
       }
@@ -157,6 +158,19 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
       }
     }
     max
+  }
+
+  pub fn is_cv_sufficient(&self, x: X, cv: f64) -> bool {
+    match self.data_set.get(&x).map(|ys| Stat::from_vec(self.unit, ys)) {
+      Some(stat) => {
+        if stat.count <= 2 {
+          false
+        } else {
+          stat.cv() < cv
+        }
+      }
+      None => false,
+    }
   }
 
   fn calculate_statistics_for(&self, x: X) -> Option<Stat> {

@@ -78,6 +78,23 @@ pub fn file_size<P: AsRef<Path>>(path: P) -> u64 {
   }
 }
 
+pub fn file_count_and_size<P: AsRef<Path>>(path: P) -> (usize, u64) {
+  if path.as_ref().is_file() {
+    (1, metadata(&path).map(|m| m.len()).unwrap_or(0))
+  } else if path.as_ref().is_dir() {
+    read_dir(path)
+      .unwrap()
+      .flat_map(std::result::Result::ok)
+      .map(|e| {
+        let path = e.path();
+        if path.is_dir() { file_size(&path) } else { metadata(&path).map(|m| m.len()).unwrap_or(0) }
+      })
+      .fold((0, 0), |(c, s), x| (c + 1, s + x))
+  } else {
+    (0, 0)
+  }
+}
+
 pub fn splitmix64(x: u64) -> u64 {
   let mut z = x;
   z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);

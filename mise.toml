@@ -5,16 +5,15 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = 256
+DATA_SIZE = "{{ 128 * 1024 * 1024 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 WORK_DIR = "/tmp"
-SESSION_ID = "{{ now() | date(format='%Y%m%d%H%M%S') }}"
 COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
 [tasks.setup]
 description = "Setup all project dependencies"
-depends = ["{{ os() }}:setup", "setup:python", "setup:go", "setup:rust"]
+depends = ["setup:*", "{{ os() }}:setup"]
 
 [tasks.clean]
 description = "Clean all build artifacts and results"
@@ -27,14 +26,14 @@ run = [
 [tasks.build]
 depends = ["build:*"]
 
-[tasks.run]
+[tasks.bench]
 description = "Run benchmark"
-depends = ["build:*"]
 run = [
   # When specified as depends, they are executed in parallel, but must be executed sequentially to
   # measure performance.
-  "{{mise_bin}} --env SESSION_ID=$SESSION_ID run run:go",
-  "{{mise_bin}} --env SESSION_ID=$SESSION_ID run run:rust",
+  "{{mise_bin}} run bench:info",
+  "{{mise_bin}} run bench:go",
+  "{{mise_bin}} run bench:rust",
 ]
 
 [tasks.fmt]
@@ -64,21 +63,22 @@ run = [
 
 [tasks."setup:go"]
 description = "Setup Go project dependencies"
-run = [
-  "cd golang && go mod download",
-]
+dir = "golang"
+run = ["go mod download"]
 
 [tasks."build:go"]
 description = "Build benchmark for Go"
 depends = ["setup:go"]
 sources = ["golang/main.go", "golang/go.mod"]
 outputs = ["golang/iavl"]
-run = ["cd golang && go build -trimpath -o iavl main.go"]
+dir = "golang"
+run = ["go build -trimpath -o iavl main.go"]
 
-[tasks."run:go"]
+[tasks."bench:go"]
 description = "Run Go benchmarks"
+env.DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
 depends = ["build:go"]
-run = ["golang/iavl $DATA_VOLUME --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\" --session \"$SESSION_ID\""]
+run = ["golang/iavl $DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\""]
 
 # --- Rust Projects ---
 
@@ -96,33 +96,40 @@ run = "cd rust && cargo fmt"
 description = "Build benchmark for Rust"
 depends = ["setup:rust"]
 sources = ["rust/src/**/*.rs", "rust/benches/**/*.rs", "rust/Cargo.toml"]
-outputs = ["rust/target/release/slate_benchmark"]
-run = "cd rust && cargo build --release"
+outputs = ["target/release/slate_benchmark"]
+run = "cargo build --release"
 
-[tasks."run:rust"]
+[tasks."bench:rust"]
 description = "Run benchmark"
-depends = ["build:rust", "{{ os_family() }}:run:rust"]
-
-[tasks."windows:run:rust"]
-run = "rust\\target\\release\\slate_benchmark.exe %DATA_VOLUME% --dir \"%WORK_DIR%\" --output \"%RESULTS_DIR%\" --session \"%SESSION_ID%\""
-
-[tasks."unix:run:rust"]
-run = "rust/target/release/slate_benchmark $DATA_VOLUME --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\" --session \"$SESSION_ID\""
+depends = ["build:rust"]
+run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\""
 
 # --- Environment Dependency ---
 
-[tasks."linux:setup"]
-description = "Install fonts used for graph drawing."
+[tasks."bench:info"]
 run = [
-  "mkdir -p $RESULTS_DIR",
-  "echo '🐧 Installing fonts on Linux...'",
-  "USER_FONT_DIR=\"${HOME}/.local/share/fonts\"",
-  "mkdir -p $USER_FONT_DIR",
-  "cp scripts/NeueHaasDisplay-Roman.ttf $USER_FONT_DIR",
-  "echo \"🔄 Updating font cache...\"",
-  "sudo fc-cache -fv >/dev/null 2>&1",
-  "fc-cache -fv >/dev/null 2>&1",
-  "echo \"✅ Linux font installation complete: $(fc-list 'Neue Haas Grotesk Display Pro')\"",
+  "python bench_info.py \"$WORK_DIR\""
 ]
 
-[tasks."setup:windows"]
+[tasks."linux:setup"]
+run = [
+  "mkdir -p $RESULTS_DIR",
+
+  '''
+  echo '🎸 Installing LaTeX...'
+  sudo apt-get update
+  sudo apt -y install texlive-xetex texlive-lang-japanese texlive-fonts-extra dvipng
+  sudo apt -y install smartmontools fio
+  ''',
+
+  '''
+  echo '🐧 Installing fonts on Linux...'
+  USER_FONT_DIR="${HOME}/.local/share/fonts"
+  mkdir -p "$USER_FONT_DIR"
+  cp scripts/NeueHaasDisplay-Roman.ttf "$USER_FONT_DIR"
+  echo "🔄 Updating font cache..."
+  sudo fc-cache -fv >/dev/null 2>&1
+  fc-cache -fv >/dev/null 2>&1
+  echo "✅ Linux font installation complete: $(fc-list 'Neue Haas Grotesk Display Pro')"
+  ''',
+]

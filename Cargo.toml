@@ -1,4 +1,12 @@
 [workspace]
-members = [
-  "rust",
-]
+members = ["rust"]
+resolver = "3"
+
+[profile.release]
+debug = false
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.bench]
+debug = true
