@@ -1,4 +1,5 @@
 # pip install numpy matplotlib
+import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
 import math
@@ -45,17 +46,17 @@ def entry_access_distance(k: int, n: int):
       return j - cnt_ones + (1 if i != n else 0)
   return None
 
-def worst_best(n):
-  h = ceil_log2(n)
-  worst = [None] * (h + 1)
-  best = [None] * (h + 1)
-  for i in range(1, n + 1):
-    d = entry_access_distance(i, n)
-    if worst[d] is None:
-      worst[d] = i
-    best[d] = i
+# def worst_best(n):
+#   h = ceil_log2(n)
+#   worst = [None] * (h + 1)
+#   best = [None] * (h + 1)
+#   for i in range(1, n + 1):
+#     d = entry_access_distance(i, n)
+#     if worst[d] is None:
+#       worst[d] = i
+#     best[d] = i
   
-  pass
+#   pass
 
 def main():
   #N = pow2e(8) + pow2e(6) + pow2e(5)
@@ -64,7 +65,13 @@ def main():
   ks = np.arange(1, N + 1, dtype=np.int64)
   ds = [entry_access_distance(k, N) for k in ks]
 
-  FONT = "Neue Haas Grotesk Display Pro"
+  matplotlib.use('pgf')
+  plt.rcParams.update({
+    "text.usetex": True,
+    "pgf.texsystem": "xelatex",
+    "pgf.rcfonts": False,
+    "pgf.preamble": r"\usepackage{fontspec}\setsansfont{Neue Haas Grotesk Display Pro}"
+  })
   plt.figure(figsize=(6, 4))
   plt.scatter(ks, ds, marker='o', facecolors='none', edgecolors='#A0C4FF', s=10)
 
@@ -96,13 +103,14 @@ def main():
   plt.plot(ds_ul_x, ds_ul_y, drawstyle='steps-post', color='#991C38', marker='o', linewidth=3, alpha=0.25, zorder=3, label='$d\'_{{\\rm ul},i}$')
   plt.plot(ds_ll_x, ds_ll_y, drawstyle='steps-pre', color='#1C6ECD', marker='o', linewidth=3, alpha=0.25, zorder=2, label='$d\'_{{\\rm ll},i}$')
 
-  plt.xlabel('Position $i$', fontname=FONT, fontsize=10)
-  plt.ylabel('Number of I/O Reads $d$', fontname=FONT, fontsize=10)
-  plt.title(f'Distribution of I/O Read ($T_{{{N}}}$)', fontname=FONT, fontsize=12)
+  plt.xlabel('Position $i$', fontsize=10)
+  plt.ylabel('Number of I/O Reads $d$', fontsize=10)
+  plt.title(f'Distribution of I/O Read ($T_{{{N}}}$)', fontsize=12)
   plt.grid(True, which='both', linestyle='--', alpha=0.7)
   plt.legend(fontsize=10)
   plt.tight_layout()
   plt.savefig(f'io_read_h{H:02}.png', dpi=300)
+  print(f'Theoretical cost for the number of I/O Reads were output graphically: io_read_h{H:02}.png')
 
 if __name__ == "__main__":
   main()

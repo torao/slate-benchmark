@@ -111,6 +111,11 @@ run = [
   "python bench_info.py \"$WORK_DIR\""
 ]
 
+[tasks."graph:io-read"]
+run = [
+  "cd scripts && python hamming-weight.py 11"
+]
+
 [tasks."linux:setup"]
 run = [
   "mkdir -p $RESULTS_DIR",
