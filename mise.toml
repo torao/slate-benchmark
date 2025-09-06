@@ -5,7 +5,7 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = "{{ 128 * 1024 * 1024 }}"
+DATA_SIZE = "{{ 256 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 WORK_DIR = "/tmp"
@@ -18,10 +18,7 @@ depends = ["setup:*", "{{ os() }}:setup"]
 [tasks.clean]
 description = "Clean all build artifacts and results"
 depends = ["clean:*"]
-run = [
-  "rm -rf $RESULTS_DIR/*",
-  "rm -f *.png",
-]
+run = ["rm -rf $RESULTS_DIR/*", "rm -f *.png"]
 
 [tasks.build]
 depends = ["build:*"]
@@ -43,23 +40,19 @@ depends = ["fmt:*"]
 # -- Python ---
 
 [tasks."setup:python"]
-run = [
-  "cd python && python -m pip install -r scripts/requirements.txt",
-]
+run = ["cd python && python -m pip install -r scripts/requirements.txt"]
 
 # --- Golang ---
 
 [tasks."clean:go"]
 description = "Clean Go build artifacts and results"
-run = [
-  "cd golang && ./iavl --clean && go mod tidy && go clean",
-]
+dir = "golang"
+run = ["./iavl/iavl --clean && go mod tidy && go clean"]
 
 [tasks."fmt:go"]
 description = "Clean Go build artifacts and results"
-run = [
-  "cd golang && go mod tidy && go fmt", 
-]
+dir = "golang"
+run = ["go mod tidy && go fmt mt_bench/common mt_bench/iavl mt_bench/doltdb"]
 
 [tasks."setup:go"]
 description = "Setup Go project dependencies"
@@ -68,26 +61,36 @@ run = ["go mod download"]
 
 [tasks."build:go"]
 description = "Build benchmark for Go"
+depends = ["setup:go", "build:iavl", "build:doltdb"]
+
+[tasks."build:iavl"]
 depends = ["setup:go"]
-sources = ["golang/main.go", "golang/go.mod"]
-outputs = ["golang/iavl"]
+sources = ["golang/iavl/**/*.go", "golang/common/**/*.go", "golang/go.mod"]
+outputs = ["golang/iavl/iavl"]
 dir = "golang"
-run = ["go build -trimpath -o iavl main.go"]
+run = ["go build -trimpath -o iavl/iavl iavl/main.go"]
+
+[tasks."build:doltdb"]
+depends = ["setup:go"]
+sources = ["golang/doltdb/main.go", "golang/common/**/*.go", "golang/go.mod"]
+outputs = ["golang/doltdb/doltdb"]
+dir = "golang"
+run = ["go build -trimpath -o doltdb/doltdb doltdb/main.go"]
 
 [tasks."bench:go"]
 description = "Run Go benchmarks"
-env.DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
+env.IAVL_DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
 depends = ["build:go"]
-run = ["golang/iavl $DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\""]
+run = [
+  "golang/iavl/iavl $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\"",
+]
 
 # --- Rust Projects ---
 
 [tasks."setup:rust"]
 
 [tasks."clean:rust"]
-run = [
-  "cd rust && target/release/slate_benchmark --clean && cargo clean",
-]
+run = ["cd rust && target/release/slate_benchmark --clean && cargo clean"]
 
 [tasks."fmt:rust"]
 run = "cd rust && cargo fmt"
@@ -107,14 +110,10 @@ run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --output \"
 # --- Environment Dependency ---
 
 [tasks."bench:info"]
-run = [
-  "python bench_info.py \"$WORK_DIR\""
-]
+run = ["python bench_info.py \"$WORK_DIR\""]
 
 [tasks."graph:io-read"]
-run = [
-  "cd scripts && python hamming-weight.py 11"
-]
+run = ["cd scripts && python hamming-weight.py 11"]
 
 [tasks."linux:setup"]
 run = [

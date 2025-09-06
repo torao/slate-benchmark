@@ -4,4 +4,6 @@
 *.gz
 *.csv
 *.png
-iavl
+
+/golang/iavl/iavl
+/golang/doltdb/doltdb
