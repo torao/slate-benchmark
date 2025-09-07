@@ -5,7 +5,7 @@ dir=results
 size=1M
 
 latest_timestamp() {
-  find $dir -maxdepth 1 -name "[0-9]*-$1*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
+  find $dir -maxdepth 1 -name "[0-9]*-$1-*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
 }
 
 # Volume
@@ -17,7 +17,7 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-volume-slate-file.csv=Slate (file)" \
     "$dir/$ts1-volume-slate-rocksdb.csv=Slate (rocksdb)" \
     "$dir/$ts2-volume-iavl-leveldb.csv=IAVL+ (leveldb)" \
-    "$dir/$ts3-volume-doltdb.csv=DoltDB (file)" \
+    "$dir/$ts3-volume-doltdb-file.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-volume.png" \
     --title "Volume Performance \$(T_{\\rm 1M})\$" \
     --xlabel "Number of data" \
@@ -36,7 +36,7 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-append-slate-memory.csv=Slate (memory)" \
     "$dir/$ts1-append-seqfile-file.csv=Unindexed Sequence File" \
     "$dir/$ts2-append-iavl-leveldb.csv=IAVL+ (leveldb)" \
-    "$dir/$ts3-append-doltdb.csv=DoltDB (file)" \
+    "$dir/$ts3-append-doltdb-file.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" \
     --title "Append Performance \$(T_{\\rm $size})\$" \
     --xlabel "Number of data" \
@@ -45,26 +45,26 @@ if [ ! -z "$ts1" ]; then
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" "bench-append.png"
 fi
 
-# Query
-ts1=$(latest_timestamp "query-slate")
-ts2=$(latest_timestamp "query-iavl")
-ts3=$(latest_timestamp "query-doltdb")
+# Get
+ts1=$(latest_timestamp "get-slate")
+ts2=$(latest_timestamp "get-iavl")
+ts3=$(latest_timestamp "get-doltdb")
 if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot2.py \
-    "$dir/$ts1-query-slate-file.csv=Slate (file)" \
-    "$dir/$ts1-query-slate-rocksdb.csv=Slate (rocksdb)" \
-    "$dir/$ts1-query-slate-memkvs.csv=Slate (memkvs)" \
-    "$dir/$ts1-query-hashtree-file.csv=Binary Tree (file)" \
-    "$dir/$ts2-query-iavl-leveldb.csv=IAVL+ (leveldb)" \
-    "$dir/$ts3-query-doltdb.csv=DoltDB (file)" \
-    -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-query.png" \
-    --title "Query Performance \$(T_{\\rm $size})\$" \
+    "$dir/$ts1-get-slate-file.csv=Slate (file)" \
+    "$dir/$ts1-get-slate-rocksdb.csv=Slate (rocksdb)" \
+    "$dir/$ts1-get-slate-memkvs.csv=Slate (memkvs)" \
+    "$dir/$ts1-get-hashtree-file.csv=Binary Tree (file)" \
+    "$dir/$ts2-get-iavl-leveldb.csv=IAVL+ (leveldb)" \
+    "$dir/$ts3-get-doltdb.csv=DoltDB (file)" \
+    -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-get.png" \
+    --title "Get Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
     --ymin 0 --ymax 0.03 \
-    --xscale log \
+    --xscale linear \
     --no-errorbars --no-scatter
-  cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-query.png" "bench-query.png"
+  cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-get.png" "bench-get.png"
 fi
 
 # Cache
@@ -79,7 +79,7 @@ if [ ! -z "$ts" ]; then
     --title "Cache Performance (\$T_{\\rm $size}\$ slate file)" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
-    --xscale log \
+    --xscale linear \
     --no-errorbars --no-scatter
   cp "$dir/$ts-cache.png" "bench-cache.png"
 fi

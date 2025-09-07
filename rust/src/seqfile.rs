@@ -33,7 +33,7 @@ impl CUT for SeqFileCUT {
 impl AppendCUT for SeqFileCUT {
   #[inline(never)]
   fn append(path: &Self::T, n: Index) -> Result<(u64, Duration)> {
-    let mut file = OpenOptions::new().append(true).write(true).open(path)?;
+    let mut file = OpenOptions::new().append(true).open(path)?;
     let begin = file.metadata()?.len() / 8;
     assert!(begin <= n);
     let start = Instant::now();

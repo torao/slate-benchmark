@@ -102,6 +102,6 @@ func main() {
 	across different data sizes.
 `)
 	common.PrintSystemInfo("DoltDB Benchmark", "File (DoltDB)", config)
-	//common.BenchmarkGet(config, "query-doltdb-file", measureAppend, measureQuery)
+	common.BenchmarkGet(config, "get-doltdb-file", measureAppend, measureQuery)
 	common.BenchmarkAppend(config, "append-doltdb-file", "volume-doltdb-file", measureAppend)
 }

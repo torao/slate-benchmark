@@ -24,3 +24,7 @@ CMake and C-compiler are required to build RocksDB with `cargo build`.
 ```bash
 sudo apt install llvm-dev libclang-dev clang
 ```
+
+```bash
+mise run bench
+```
