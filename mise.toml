@@ -59,10 +59,6 @@ description = "Setup Go project dependencies"
 dir = "golang"
 run = ["go mod download"]
 
-[tasks."build:go"]
-description = "Build benchmark for Go"
-depends = ["setup:go", "build:iavl", "build:doltdb"]
-
 [tasks."build:iavl"]
 depends = ["setup:go"]
 sources = ["golang/iavl/**/*.go", "golang/common/**/*.go", "golang/go.mod"]
@@ -80,9 +76,10 @@ run = ["go build -trimpath -o doltdb/doltdb doltdb/main.go"]
 [tasks."bench:go"]
 description = "Run Go benchmarks"
 env.IAVL_DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
-depends = ["build:go"]
+depends = ["build:iavl", "build:doltdb"]
 run = [
   "golang/iavl/iavl $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\"",
+  "golang/doltdb/doltdb $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\"",
 ]
 
 # --- Rust Projects ---
@@ -107,13 +104,18 @@ description = "Run benchmark"
 depends = ["build:rust"]
 run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\""
 
+# --- Graph ---
+
+[tasks."graph:experiments"]
+run = ["./run.sh"]
+
+[tasks."graph:io-read"]
+run = ["cd scripts && python hamming-weight.py 11"]
+
 # --- Environment Dependency ---
 
 [tasks."bench:info"]
 run = ["python bench_info.py \"$WORK_DIR\""]
-
-[tasks."graph:io-read"]
-run = ["cd scripts && python hamming-weight.py 11"]
 
 [tasks."linux:setup"]
 run = [

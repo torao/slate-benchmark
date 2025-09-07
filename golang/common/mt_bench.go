@@ -41,7 +41,7 @@ func BenchmarkAppend(
 	append_id, volume_id string,
 	measureAppend func(string, uint64) (time.Duration, uint64),
 ) {
-	fmt.Println("=== Append Benchmark ===")
+	fmt.Printf("=== Append Benchmark (%s) ===\n", append_id)
 	fmt.Println("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials")
 	fmt.Println("--------\t--------\t----------\t-----\t\t------")
 
@@ -50,26 +50,29 @@ func BenchmarkAppend(
 	spaceComplexity := NewStats()
 	start := time.Now()
 	for i := 0; i < MaxTrials; i++ {
-		if i > MinTrials {
-			ns = FilterCvSufficient(ns, timeComplexity)
+		if i > MinTrials && len(FilterCvSufficient(ns, timeComplexity)) == 0 {
+			break
 		}
-		if len(ns) == 0 || time.Since(start) >= MaxDuration {
+		if time.Since(start) >= MaxDuration {
+			fmt.Println("** TIMED OUT **")
 			break
 		}
 
 		config.RemoveDatabase(append_id)
+		var cumTime time.Duration
 		for _, n := range ns {
-			tm, space := measureAppend(config.DatabasePath(append_id), n)
-			timeComplexity.Add(n, float64(tm.Nanoseconds())/1000.0/1000.0)
+			elapse, space := measureAppend(config.DatabasePath(append_id), n)
+			cumTime += elapse
+			timeComplexity.Add(n, float64(cumTime.Nanoseconds())/1000.0/1000.0)
 			if i == 0 {
 				spaceComplexity.Add(n, float64(space))
 			}
 		}
 		config.RemoveDatabase(append_id)
 		if i%100 == 99 {
-			mean, stddev, size := timeComplexity.Calculate(config.DataSize)
-			fmt.Printf("%d\t\t%.2fms\t\t%.2fms\t\t%.3f\t\t%d\n",
-				config.DataSize, mean, stddev, stddev/mean, size)
+			mean, stddev, _ := timeComplexity.Calculate(config.DataSize)
+			fmt.Printf("%d\t\t%.1fms\t%.2fms\t\t%.3f\t\t%d\n",
+				config.DataSize, mean, stddev, stddev/mean, i+1)
 		}
 	}
 
@@ -77,14 +80,14 @@ func BenchmarkAppend(
 	spaceComplexity.Save(config.ResultFile(volume_id), "SIZE", "BYTES")
 }
 
-// Query 性能のベンチマーク
-func BenchmarkQuery(
+// Get 性能のベンチマーク
+func BenchmarkGet(
 	config *Config,
 	query_id string,
 	measureAppend func(string, uint64) (time.Duration, uint64),
 	measureQuery func(string, []uint64) map[uint64]time.Duration,
 ) {
-	fmt.Println("\n=== Query Benchmark ===")
+	fmt.Printf("\n=== Get Benchmark (%s) ===\n", query_id)
 
 	// データベースを作成
 	fmt.Printf("Creating database with %d entries...\n", config.DataSize)
@@ -102,17 +105,23 @@ func BenchmarkQuery(
 	timeComplexity := NewStats()
 	start := time.Now()
 	for i := 0; i < MaxTrials; i++ {
+		if i > MinTrials {
+			is = FilterCvSufficient(is, timeComplexity)
+			if len(is) == 0 {
+				break
+			}
+		}
+		if time.Since(start) >= MaxDuration {
+			fmt.Println("** TIMED OUT **")
+			break
+		}
+
 		rand.Shuffle(len(is), func(i, j int) {
 			is[i], is[j] = is[j], is[i]
 		})
 		result := measureQuery(config.DatabasePath(query_id), is)
 		for j, duration := range result {
 			timeComplexity.Add(j, float64(duration.Nanoseconds())/1000.0/1000.0)
-		}
-		if i+1 >= MinTrials {
-			if timeComplexity.MaxRelative() <= CVThreshold || time.Since(start) >= MaxDuration {
-				break
-			}
 		}
 		if (i+1)%100 == 0 {
 			fmt.Printf("%d\t\t%.3f\t\t%d/%d\n", config.DataSize, timeComplexity.MaxRelative(), i+1, MaxTrials)

@@ -1,43 +1,47 @@
-use slate::Result;
-use slate_benchmark::splitmix64;
-use std::fs::{File, OpenOptions, remove_file};
+use slate::{Index, Result};
+use slate_benchmark::{file_size, splitmix64, unique_file};
+use std::fs::{OpenOptions, remove_file};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::{Case, Driver};
+use crate::{AppendCUT, CUT, Case};
 
-pub struct AppendDriver {
-  path: Option<PathBuf>,
-}
-impl AppendDriver {
-  pub fn new() -> Self {
-    AppendDriver { path: None }
-  }
-}
-impl Driver<File, Duration> for AppendDriver {
-  fn setup(&mut self, case: &Case) -> Result<File> {
-    let path = case.file("seqfile.db");
-    self.path = Some(path.clone());
-    Ok(OpenOptions::new().create_new(true).write(true).open(&path)?)
-  }
+#[derive(Default)]
+pub struct SeqFileCUT {}
 
-  #[inline(never)]
-  fn run(&mut self, _case: &Case, file: &mut File, n: u64) -> Result<Duration> {
-    let start = Instant::now();
+impl CUT for SeqFileCUT {
+  type T = PathBuf;
+
+  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T> {
+    let path = unique_file(&case.dir_work(id), "seqfile", ".db");
+    let mut file = OpenOptions::new().create_new(false).append(false).write(true).open(&path)?;
     for i in 1..=n {
+      file.write_all(&values(i).to_le_bytes())?;
+    }
+    Ok(path)
+  }
+
+  fn remove(path: &Self::T) -> Result<()> {
+    if path.exists() {
+      remove_file(path)?;
+    }
+    Ok(())
+  }
+}
+
+impl AppendCUT for SeqFileCUT {
+  #[inline(never)]
+  fn append(path: &Self::T, n: Index) -> Result<(u64, Duration)> {
+    let mut file = OpenOptions::new().append(true).write(true).open(path)?;
+    let begin = file.metadata()?.len() / 8;
+    assert!(begin <= n);
+    let start = Instant::now();
+    for i in begin + 1..=n {
       file.write_all(&splitmix64(i).to_le_bytes())?;
     }
     let elapse = start.elapsed();
-    Ok(elapse)
-  }
-
-  fn cleanup(&mut self, _case: &Case, file: File) -> Result<()> {
-    drop(file);
-    if let Some(path) = &self.path {
-      remove_file(path)?;
-    }
-    self.path = None;
-    Ok(())
+    let size = file_size(path);
+    Ok((size, elapse))
   }
 }

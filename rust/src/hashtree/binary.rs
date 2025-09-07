@@ -159,7 +159,10 @@ impl<S> BinaryHashTree<S>
 where
   S: Storage<Node>,
 {
-  fn create(storage: &mut S, h: u8) -> Result<()> {
+  fn create<V>(storage: &mut S, h: u8, values: V) -> Result<()>
+  where
+    V: Fn(u64) -> Vec<u8>,
+  {
     debug_assert!(h > 0);
     let (node, position) = storage.first()?;
     debug_assert!(node.is_none());
@@ -181,18 +184,21 @@ where
     assert_eq!(position_root, position_root2);
 
     // すべてのノードを書き込み
-    Self::create_for_level(storage, position_root, h, 0)?;
+    Self::create_for_level(storage, position_root, h, 0, values)?;
     Ok(())
   }
 
-  fn create_for_level(storage: &mut S, mut current: Position, h: u8, level: u8) -> Result<Vec<Node>> {
+  fn create_for_level<V>(storage: &mut S, mut current: Position, h: u8, level: u8, values: V) -> Result<Vec<Node>>
+  where
+    V: Fn(u64) -> Vec<u8>,
+  {
     let offset = pow2e(level);
     let length = pow2e(level);
     let mut nodes = Vec::with_capacity(length as usize);
     for k in 0..length {
       let index = offset + k;
       let node = if level + 1 == h {
-        let value = splitmix64(k + 1).to_le_bytes().to_vec();
+        let value = values(k + 1);
         Node::new_leaf(current, index, value)
       } else {
         let mut hasher = Hasher::new();
@@ -203,7 +209,7 @@ where
       nodes.push(node);
     }
     if level + 1 < h {
-      let subnodes = Self::create_for_level(storage, current, h, level + 1)?;
+      let subnodes = Self::create_for_level(storage, current, h, level + 1, values)?;
       for (k, node) in nodes.iter_mut().enumerate() {
         let left = subnodes.get(2 * k).unwrap();
         let right = subnodes.get(2 * k + 1).unwrap();
@@ -231,7 +237,7 @@ where
           queue.push_back(*right);
         }
         cache.insert(position, node);
-        if cache.len() == limit {
+        if cache.len() == limit || queue.is_empty() {
           break 'cache_read;
         }
       }
@@ -259,12 +265,16 @@ impl BinaryHashTree<BlockStorage<FileDevice>> {
   }
 
   /// Create a new binary hash tree with file storage
-  pub fn create_on_file<P: AsRef<Path>>(path: P, h: u8, cache_limit: usize) -> Result<Self> {
+  pub fn create_on_file<P, V>(path: P, h: u8, cache_limit: usize, values: V) -> Result<Self>
+  where
+    P: AsRef<Path>,
+    V: Fn(u64) -> Vec<u8>,
+  {
     if path.as_ref().exists() {
       fs::remove_file(&path)?;
     }
     let mut storage = BlockStorage::from_file(path, false)?;
-    Self::create(&mut storage, h)?;
+    Self::create(&mut storage, h, values)?;
     Self::new(storage, cache_limit)
   }
 }
@@ -273,13 +283,13 @@ impl BinaryHashTree<MemKVS<Node>> {
   /// Create a new binary hash tree with file storage
   pub fn create_on_memory(h: u8) -> Result<Self> {
     let mut storage = MemKVS::new();
-    Self::create(&mut storage, h)?;
+    Self::create(&mut storage, h, |i| splitmix64(i).to_le_bytes().to_vec())?;
     Self::new(storage, 1)
   }
 
   pub fn create_on_memory_with_kvs(h: u8, kvs: Arc<RwLock<HashMap<Position, Node>>>) -> Result<Self> {
     let mut storage = MemKVS::with_kvs(kvs);
-    Self::create(&mut storage, h)?;
+    Self::create(&mut storage, h, |i| splitmix64(i).to_le_bytes().to_vec())?;
     Self::new(storage, 1)
   }
 }

@@ -7,15 +7,12 @@ use rand::seq::SliceRandom;
 use rayon::iter::Either;
 use rayon::prelude::*;
 use slate_benchmark::{file_count_and_size, file_size, splitmix64};
-use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::{self, create_dir_all};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-
-use crate::stat::Stat;
 
 mod binarytree;
 mod seqfile;
@@ -58,132 +55,61 @@ fn main() -> Result<()> {
     return Ok(());
   }
 
-  #[cfg(false)]
+  #[cfg(true)]
   {
     experiment
-      .case("volume-slate-file", &args, false)?
-      .min_n(0)
-      .max_n(args.data_size)
-      .division(25)
-      .min_trials(1)
-      .max_trials(1)
-      .measure_the_storage_size_relative_to_the_amount_of_data(slate::FileVolumeDriver::new())?;
-
-    experiment
-      .case("volume-slate-rocksdb", &args, false)?
-      .min_n(0)
-      .max_n(args.data_size)
-      .division(25)
-      .min_trials(1)
-      .max_trials(1)
-      .measure_the_storage_size_relative_to_the_amount_of_data(slate::RocksDBVolumeDriver::new())?;
-  }
-
-  #[cfg(false)]
-  {
-    experiment
-      .case("query-slate-memkvs", &args, false)?
+      .case(&args)?
       .max_n(args.data_size)
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
-      .stability_threshold(0.5)
-      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::MemKVSQueryDriver::new())?;
-
-    experiment
-      .case("query-slate-file", &args, false)?
-      .max_n(args.data_size)
-      .division(100)
-      .scale(Scale::WorstCase)
-      .max_trials(500)
-      .stability_threshold(0.5)
-      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileQueryDriver::new())?;
-
-    experiment
-      .case("query-slate-rocksdb", &args, false)?
-      .max_n(args.data_size)
-      .division(100)
-      .scale(Scale::WorstCase)
-      .max_trials(500)
-      .stability_threshold(0.5)
-      .measure_the_data_retrieval_time_relative_to_the_access_location(slate::RocksDBQueryDriver::new())?;
-
-    experiment
-      .case("query-hashtree-file", &args, false)?
-      .max_n(args.data_size)
-      .division(100)
+      .cv_threshold(0.5)
+      .measure_the_retrieval_time_relative_to_the_position::<slate::MemSlateCUT>("get-slate-memkvs", 0)?
+      .measure_the_retrieval_time_relative_to_the_position::<slate::FileSlateCUT>("get-slate-file", 0)?
+      .measure_the_retrieval_time_relative_to_the_position::<slate::RocksDBSlateCUT>("get-slate-rocksdb", 0)?
       .scale(Scale::Log)
-      .min_trials(5)
-      .max_trials(500)
-      .stability_threshold(0.5)
-      .measure_the_data_retrieval_time_relative_to_the_access_location(binarytree::BinTreeQueryDiver::new())?;
+      .measure_the_retrieval_time_relative_to_the_position::<binarytree::FileBinaryTreeCUT>("get-hashtree-file", 1)?;
   }
 
   #[cfg(true)]
   {
     experiment
-      .case("slate-file", &args)?
+      .case(&args)?
       .max_n(args.data_size)
       .division(10)
       .min_trials(2)
       .max_trials(10)
-      .measure_the_append_time_relative_to_the_amount_of_data::<slate::FileSlateCUT>()?;
-
-    experiment
-      .case("slate-rocksdb", &args)?
-      .max_n(args.data_size)
-      .division(10)
-      .min_trials(2)
-      .max_trials(10)
-      .measure_the_append_time_relative_to_the_amount_of_data::<slate::RocksDBSlateCUT>()?;
+      .measure_the_append_time_relative_to_the_data_amount::<slate::FileSlateCUT>("slate-file")?
+      .measure_the_append_time_relative_to_the_data_amount::<slate::RocksDBSlateCUT>("slate-rocksdb")?
+      .measure_the_append_time_relative_to_the_data_amount::<seqfile::SeqFileCUT>("seqfile-file")?
+      .measure_the_append_time_relative_to_the_data_amount::<slate::MemSlateCUT>("slate-memory")?;
   }
 
-  #[cfg(false)]
-  {
-    experiment
-      .case("seqfile-file", &args, false)?
-      .max_n(args.data_size)
-      .division(10)
-      .min_trials(2)
-      .max_trials(10)
-      .measure_the_append_time_relative_to_the_amount_of_data(seqfile::AppendDriver::new())?;
-
-    experiment
-      .case("slate-memory", &args, false)?
-      .max_n(args.data_size)
-      .division(10)
-      .min_trials(2)
-      .max_trials(10)
-      .measure_the_append_time_relative_to_the_amount_of_data(slate::MemoryAppendDriver::new())?;
-  }
-
-  #[cfg(false)]
+  #[cfg(true)]
   {
     for level in 0..=3 {
       experiment
-        .case(&format!("cache-slate-file-{level}"), &args, true)?
+        .case(&args)?
         .max_n(args.data_size)
         .division(64)
         .scale(Scale::WorstCase)
         .max_trials(1000)
-        .stability_threshold(0.5)
-        .measure_the_data_retrieval_time_relative_to_the_access_location(slate::FileCacheDriver::new(level))?;
+        .cv_threshold(0.5)
+        .measure_the_retrieval_time_relative_to_the_position::<slate::FileSlateCUT>(
+          &format!("cache-slate-file-{level}"),
+          level,
+        )?;
     }
   }
 
   #[cfg(true)]
   {
     experiment
-      .case("prove-slate-file", &args)?
+      .case(&args)?
       .max_n(args.data_size)
       .scale(Scale::WorstCase)
-      .measure_the_prove_time_relative_to_the_position_of_the_data_difference::<slate::FileSlateCUT>()?;
-
-    experiment
-      .case("prove-slate-rocksdb", &args)?
-      .max_n(args.data_size)
-      .scale(Scale::WorstCase)
-      .measure_the_prove_time_relative_to_the_position_of_the_data_difference::<slate::RocksDBSlateCUT>()?;
+      .measure_the_prove_time_relative_to_the_position::<slate::FileSlateCUT>("prove-slate-file")?
+      .measure_the_prove_time_relative_to_the_position::<slate::RocksDBSlateCUT>("prove-slate-rocksdb")?;
   }
 
   Ok(())
@@ -208,10 +134,8 @@ struct Experiment {
 }
 
 pub struct Case {
-  pub id: String,
-  pub name: String,
   pub session: String,
-  pub dir_work: PathBuf,
+  pub dir: PathBuf,
   pub dir_report: PathBuf,
   pub min_n: Index,
   pub max_n: Index,
@@ -243,30 +167,22 @@ impl Experiment {
     Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
   }
 
-  pub fn case(&self, id: &str, args: &Args) -> Result<Case> {
-    let id = id.to_string();
-    let name = format!("{}-{id}", self.session);
+  pub fn case(&self, args: &Args) -> Result<Case> {
     let session = self.session.clone();
-    let dir_work = self.dir.join(format!("slate_benchmark-{name}"));
+    let dir = self.dir.clone();
     let dir_report = self.dir_report.clone();
     let min_n = 1;
     let max_n = args.data_size;
     let scale = Scale::Linear;
     let division = 100;
 
-    if !dir_work.exists() {
-      create_dir_all(&dir_work)?;
-    }
-
     let stability_threshold = self.stability_threshold;
     let min_trials = self.min_trials;
     let max_trials = self.max_trials;
     let max_duration = self.max_duration;
     Ok(Case {
-      id,
-      name,
       session,
-      dir_work,
+      dir,
       dir_report,
       min_n,
       max_n,
@@ -328,8 +244,20 @@ impl Case {
   property_decl!(max_trials, usize);
   property_decl!(max_duration, Duration);
 
-  pub fn file(&self, filename: &str) -> PathBuf {
-    self.dir_work.join(filename)
+  pub fn file(&self, id: &str, filename: &str) -> PathBuf {
+    self.dir_work(id).join(filename)
+  }
+
+  pub fn name(&self, id: &str) -> String {
+    format!("{}-{id}", self.session)
+  }
+
+  pub fn dir_work(&self, id: &str) -> PathBuf {
+    let dir_work = self.dir.join(format!("slate_benchmark-{}", self.name(id)));
+    if !dir_work.exists() {
+      create_dir_all(&dir_work).unwrap();
+    }
+    dir_work
   }
 
   fn gauge(&self) -> Vec<u64> {
@@ -356,33 +284,41 @@ impl Case {
     gauge.into_iter().filter(|x| seen.insert(*x)).collect::<Vec<_>>()
   }
 
-  fn clean(&self) -> Result<(usize, u64)> {
-    let (count, size) = file_count_and_size(&self.dir_work);
-    println!("Clean: {}: removing {count} files ({size} bytes)", self.dir_work.to_string_lossy());
-    fs::remove_dir_all(&self.dir_work)?;
+  fn clean(&self, id: &str) -> Result<(usize, u64)> {
+    let (count, size) = file_count_and_size(self.dir_work(id));
+    println!("Clean: {}: removing {count} files ({size} bytes)", self.dir_work(id).to_string_lossy());
+    fs::remove_dir_all(self.dir_work(id))?;
     Ok((count, size))
   }
 
   /// データ量に対する追記時間を計測します。
-  pub fn measure_the_append_time_relative_to_the_amount_of_data<CUT>(&self) -> Result<()>
+  pub fn measure_the_append_time_relative_to_the_data_amount<CUT>(self, id: &str) -> Result<Self>
   where
     CUT: AppendCUT,
   {
-    println!("[{}]", self.id);
+    println!("\n=== Append Benchmark ({id}) ===\n");
+    println!("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials");
+    println!("--------\t--------\t----------\t-----\t\t------");
+
     let mut space_complexity = stat::Report::new(stat::Unit::Bytes);
     let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
-    let mut gauge = self.gauge();
+    let gauge = self.gauge();
+    let start = Instant::now();
     for trials in 0..self.max_trials {
-      if trials >= cmp::max(2, self.min_trials) {
-        gauge =
-          gauge.into_iter().filter(|i| !time_complexity.is_cv_sufficient(*i, self.cv_threshold)).collect::<Vec<_>>();
+      if trials > self.min_trials && filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold).is_empty() {
+        let s = time_complexity.calculate(self.max_n).unwrap();
+        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
+        break;
       }
-      if gauge.is_empty() {
+      if start.elapsed() > self.max_duration {
+        println!("** TIMED OUT **");
+        let s = time_complexity.calculate(self.max_n).unwrap();
+        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
         break;
       }
 
       let mut cum_time = Duration::ZERO;
-      let target = CUT::prepare(self, 0, splitmix64)?;
+      let target = CUT::prepare(&self, id, 0, splitmix64)?;
       for n in gauge.iter() {
         let (size, time) = CUT::append(&target, *n)?;
         if trials == 0 {
@@ -392,115 +328,97 @@ impl Case {
         time_complexity.add(*n, cum_time.as_nanos() as f64 / 1000.0 / 1000.0);
       }
       CUT::remove(&target)?;
-
       if trials % 100 == 99 {
-        println!(
-          "  [{}/{}] n={}: cv={:.3}, tm={:.3}[msec]",
-          trials + 1,
-          self.max_trials,
-          self.max_n,
-          time_complexity.max_cv(),
-          cum_time.as_millis()
-        );
+        let s = time_complexity.calculate(self.max_n).unwrap();
+        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials + 1);
       }
     }
 
     // write report
-    let name = format!("{}-volume-{}", self.session, self.id);
+    let name = format!("{}-volume-{}", self.session, id);
     let path = self.dir_report.join(format!("{name}.csv"));
     space_complexity.save_xy_to_csv(&path, "SIZE", "BYTES")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-    let name = format!("{}-append-{}", self.session, self.id);
+    let name = format!("{}-append-{}", self.session, id);
     let path = self.dir_report.join(format!("{name}.csv"));
     time_complexity.save_xy_to_csv(&path, "SIZE", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-    Ok(())
+    Ok(self)
   }
 
   /// アクセス位置に対するデータ取得時間を計測します。
-  fn measure_the_data_retrieval_time_relative_to_the_access_location<T, D>(&self, mut driver: D) -> Result<()>
+  pub fn measure_the_retrieval_time_relative_to_the_position<CUT>(self, id: &str, cache_size: usize) -> Result<Self>
   where
-    D: Driver<T, Duration>,
+    CUT: GetCUT,
   {
-    println!("[{}]", self.id);
-    let mut target = driver.setup(self)?;
+    println!("\n=== Get Benchmark ({id}) ===\n");
 
+    // データベースを作成
+    println!("Creating database with {} entries...", self.max_n);
+    let t0 = Instant::now();
+    let target = CUT::prepare(&self, id, self.max_n, splitmix64)?;
+    let t = t0.elapsed();
+    println!("created: {:.3} [msec]", t.as_nanos() as f64 / 1000.0 / 1000.0);
+
+    println!("DataSize\tCV[%]\t\tTrials");
+    println!("--------\t--------\t----------");
+
+    let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
-    let mut report = stat::Report::new(stat::Unit::Milliseconds);
     let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
-    for count in 0..self.max_trials {
-      if count >= cmp::max(2, self.min_trials) {
-        let relative = report.max_cv();
-        if !relative.is_nan() && relative <= self.cv_threshold {
+    let start = Instant::now();
+    for trials in 0..self.max_trials {
+      if trials > self.min_trials {
+        gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
+        if gauge.is_empty() {
+          println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
           break;
         }
       }
+      if start.elapsed() >= self.max_duration {
+        println!("** TIMED OUT **");
+        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
+        break;
+      }
 
       gauge.shuffle(&mut rng);
-      for i in gauge.iter().cloned() {
-        let elapse = driver.run(self, &mut target, i)?;
-        report.add(self.max_n - i + 1, elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+      let results = CUT::gets(&target, &gauge, cache_size, splitmix64)?;
+      for (i, duration) in results {
+        time_complexity.add(i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
       }
-      if count % 100 == 99 {
-        println!("  [{}/{}] n={}: {:.3}", count + 1, self.max_trials, self.max_n, report.max_cv());
+      if (trials + 1) % 100 == 0 {
+        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
       }
     }
-    driver.cleanup(self, target)?;
+    CUT::remove(&target)?;
 
     // write report
-    let path = self.dir_report.join(format!("{}.csv", self.name));
-    report.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
+    let path = self.dir_report.join(format!("{}.csv", self.name(id)));
+    time_complexity.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-    Ok(())
+    Ok(self)
   }
 
-  // // データ量に対するストレージ容量を計測します。
-  // fn measure_the_storage_size_relative_to_the_amount_of_data<T, D>(&self) -> Result<()>
-  // where
-  //   D: AppendCUT,
-  // {
-  //   println!("[{}]", self.id);
-  //   let mut report = stat::Report::new(stat::Unit::Bytes);
-  //   let mut target = D::prepare(self, 0, splitmix64)?;
-  //   let gauge = self.gauge();
-  //   for (i, n) in gauge.iter().enumerate() {
-  //     eprint!("  [{}/{}] n={n}: ", i + 1, self.division);
-  //     let size = D::append(&target, *n)?;
-  //     let stat = report.add(n, size);
-  //     eprintln!("checkpoint: {stat}");
-  //   }
-  //   driver.cleanup(self, target)?;
-
-  //   // write report
-  //   let path = self.dir_report.join(format!("{}.csv", self.name));
-  //   report.save_xy_to_csv(&path, "N", "SIZE")?;
-  //   println!("==> The results have been saved in: {}", path.to_string_lossy());
-
-  //   return self.clean().map(|_| ());
-  // }
-
   // データ差異の位置に対する差分検出時間を計測します。
-  fn measure_the_prove_time_relative_to_the_position_of_the_data_difference<CUT>(&self) -> Result<()>
+  fn measure_the_prove_time_relative_to_the_position<CUT>(self, id: &str) -> Result<Self>
   where
     CUT: ProveCUT,
   {
-    println!("[{}]", self.id);
+    println!("\n=== Prove Benchmark ({id}) ===\n");
     let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
 
+    print!("Creating {} files with one difference each: ", gauge.len());
     let (errs, targets): (Vec<Error>, Vec<_>) = gauge
       .par_iter()
       .cloned()
       .map(Some)
       .chain(vec![None])
-      .enumerate()
-      .map(|(x, i)| {
-        let start = Instant::now();
-        let target = CUT::prepare(self, self.max_n, |k| {
+      .map(|i| {
+        let target = CUT::prepare(&self, id, self.max_n, |k| {
           let value = splitmix64(k);
           if i.map(|i| i == k).unwrap_or(false) { splitmix64(value) } else { value }
         })?;
-        let elapse = start.elapsed();
-        println!("  {}/{}: prepared: {}ms: {target:?}", x + 1, gauge.len(), elapse.as_micros());
+        print!("*");
         Ok((i, target))
       })
       .partition_map(|target| match target {
@@ -508,19 +426,29 @@ impl Case {
         Err(err) => Either::Left(err),
       });
     if !errs.is_empty() {
-      println!("preparation failure");
-      return self.clean().map(|_| ());
+      println!(": preparation failure");
+      return self.clean(id).map(|_| self);
     }
     let targets = targets.into_iter().collect::<HashMap<_, _>>();
-    println!("preparation completed");
+    println!(": preparation completed");
+
+    println!("DataSize\tCV[%]\t\tTrials");
+    println!("--------\t--------\t----------");
 
     let mut rng = rand::rng();
-    let mut report = stat::Report::new(stat::Unit::Milliseconds);
-    for count in 0..self.max_trials {
-      if count >= cmp::max(2, self.min_trials) {
-        gauge = gauge.into_iter().filter(|i| !report.is_cv_sufficient(*i, self.cv_threshold)).collect::<Vec<_>>();
+    let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
+    let start = Instant::now();
+    for trials in 0..self.max_trials {
+      if trials > self.min_trials {
+        gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
+        if gauge.is_empty() {
+          println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
+          break;
+        }
       }
-      if gauge.is_empty() {
+      if start.elapsed() >= self.max_duration {
+        println!("** TIMED OUT **");
+        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
         break;
       }
 
@@ -530,28 +458,24 @@ impl Case {
         let target2 = targets.get(&Some(i)).unwrap();
         let (result, elapse) = CUT::prove(target1, target2)?;
         assert_eq!(Some(i), result);
-        report.add(self.max_n - i + 1, elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+        time_complexity.add(self.max_n - i + 1, elapse.as_nanos() as f64 / 1000.0 / 1000.0);
       }
-      if count % 100 == 99 {
-        println!("  [{}/{}] n={}: {:.3}", count + 1, self.max_trials, self.max_n, report.max_cv());
+      if trials % 100 == 99 {
+        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
       }
     }
 
     // write report
-    let path = self.dir_report.join(format!("{}.csv", self.name));
-    report.save_xy_to_csv(&path, "DISTANCE", "DETECT TIME")?;
+    let path = self.dir_report.join(format!("{}.csv", self.name(id)));
+    time_complexity.save_xy_to_csv(&path, "DISTANCE", "DETECT TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
 
-    return self.clean().map(|_| ());
+    return self.clean(id).map(|_| self);
   }
 }
 
-pub trait Driver<T, V> {
-  fn setup(&mut self, case: &Case) -> Result<T>;
-  fn run(&mut self, case: &Case, db: &mut T, param: u64) -> Result<V>;
-  fn cleanup(&mut self, _case: &Case, _db: T) -> Result<()> {
-    Ok(())
-  }
+fn filter_cv_sufficient(gauge: &[u64], ss: &stat::Report<u64, f64>, cv: f64) -> Vec<u64> {
+  gauge.iter().filter(|i| !ss.is_cv_sufficient(**i, cv)).cloned().collect::<Vec<_>>()
 }
 
 /// Component under Test.
@@ -559,18 +483,27 @@ pub trait CUT {
   type T: std::marker::Send + Debug;
 
   /// n 個のデータを投入したデータベースを作成する。
-  fn prepare<T: Fn(Index) -> u64>(case: &Case, n: Index, values: T) -> Result<Self::T>;
+  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T>;
 
   /// 指定されたデータベースを削除する。
   fn remove(target: &Self::T) -> Result<()>;
 }
 
-pub trait ProveCUT: CUT + Sync {
-  fn prove(target1: &Self::T, target2: &Self::T) -> Result<(Option<u64>, Duration)>;
-}
-
 pub trait AppendCUT: CUT {
   fn append(target: &Self::T, n: Index) -> Result<(u64, Duration)>;
+}
+
+pub trait GetCUT: CUT {
+  fn gets<V: Fn(u64) -> u64>(
+    target: &Self::T,
+    is: &[Index],
+    cache_size: usize,
+    values: V,
+  ) -> Result<Vec<(u64, Duration)>>;
+}
+
+pub trait ProveCUT: CUT + Sync {
+  fn prove(target1: &Self::T, target2: &Self::T) -> Result<(Option<u64>, Duration)>;
 }
 
 pub trait IntoFloat: Copy {
@@ -612,14 +545,4 @@ fn logspace(min: u64, max: u64, n: usize) -> Vec<u64> {
       val.round() as u64
     })
     .collect()
-}
-
-fn data_size(path: &Path) -> u64 {
-  if path.is_dir() {
-    fs::read_dir(path).unwrap().map(|f| data_size(&f.unwrap().path())).sum::<u64>()
-  } else if path.is_file() {
-    path.metadata().unwrap().len()
-  } else {
-    0
-  }
 }

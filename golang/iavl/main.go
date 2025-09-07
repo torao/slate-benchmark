@@ -94,6 +94,6 @@ func main() {
   different data sizes.
 `)
 	common.PrintSystemInfo("Cosmos IAVL+ Benchmark (LevelDB-based)", "File (Leveldb)", config)
-	common.BenchmarkQuery(config, "query-iavl-leveldb", measureAppend, measureQuery)
+	common.BenchmarkGet(config, "get-iavl-leveldb", measureAppend, measureQuery)
 	common.BenchmarkAppend(config, "append-iavl-leveldb", "volume-iavl-leveldb", measureAppend)
 }

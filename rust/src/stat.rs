@@ -124,7 +124,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
 
   pub fn append(&mut self, x: X, mut ys: Vec<Y>) -> Stat {
     self.data_set.entry(x).or_default().append(&mut ys);
-    self.calculate_statistics_for(x).unwrap()
+    self.calculate(x).unwrap()
   }
 
   pub fn save_xy_to_csv(&self, path: &PathBuf, x_label: &str, y_labels: &str) -> Result<()> {
@@ -149,7 +149,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     }
     let mut max = 0.0;
     for x in self.data_set.keys() {
-      let r = self.calculate_statistics_for(*x).unwrap().cv();
+      let r = self.calculate(*x).unwrap().cv();
       if r.is_nan() || r.is_infinite() {
         return r;
       }
@@ -173,7 +173,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     }
   }
 
-  fn calculate_statistics_for(&self, x: X) -> Option<Stat> {
+  pub fn calculate(&self, x: X) -> Option<Stat> {
     self.data_set.get(&x).map(|ys| Stat::from_vec(self.unit, ys))
   }
 }

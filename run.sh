@@ -5,17 +5,19 @@ dir=results
 size=1M
 
 latest_timestamp() {
-  find $dir -maxdepth 1 -name "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-$1-*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
+  find $dir -maxdepth 1 -name "[0-9]*-$1*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
 }
 
 # Volume
 ts1=$(latest_timestamp "volume-slate")
 ts2=$(latest_timestamp "volume-iavl")
+ts3=$(latest_timestamp "volume-doltdb")
 if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot2.py \
     "$dir/$ts1-volume-slate-file.csv=Slate (file)" \
     "$dir/$ts1-volume-slate-rocksdb.csv=Slate (rocksdb)" \
     "$dir/$ts2-volume-iavl-leveldb.csv=IAVL+ (leveldb)" \
+    "$dir/$ts3-volume-doltdb.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-volume.png" \
     --title "Volume Performance \$(T_{\\rm 1M})\$" \
     --xlabel "Number of data" \
@@ -26,6 +28,7 @@ fi
 # Append
 ts1=$(latest_timestamp "append-slate")
 ts2=$(latest_timestamp "append-iavl")
+ts3=$(latest_timestamp "append-doltdb")
 if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot2.py \
     "$dir/$ts1-append-slate-file.csv=Slate (file)" \
@@ -33,16 +36,19 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-append-slate-memory.csv=Slate (memory)" \
     "$dir/$ts1-append-seqfile-file.csv=Unindexed Sequence File" \
     "$dir/$ts2-append-iavl-leveldb.csv=IAVL+ (leveldb)" \
+    "$dir/$ts3-append-doltdb.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" \
     --title "Append Performance \$(T_{\\rm $size})\$" \
     --xlabel "Number of data" \
-    --ylabel "Time taken to add all data [msec]"
+    --ylabel "Time taken to add all data [msec]" \
+    --no-latex
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-append.png" "bench-append.png"
 fi
 
 # Query
 ts1=$(latest_timestamp "query-slate")
 ts2=$(latest_timestamp "query-iavl")
+ts3=$(latest_timestamp "query-doltdb")
 if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot2.py \
     "$dir/$ts1-query-slate-file.csv=Slate (file)" \
@@ -50,6 +56,7 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-query-slate-memkvs.csv=Slate (memkvs)" \
     "$dir/$ts1-query-hashtree-file.csv=Binary Tree (file)" \
     "$dir/$ts2-query-iavl-leveldb.csv=IAVL+ (leveldb)" \
+    "$dir/$ts3-query-doltdb.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-query.png" \
     --title "Query Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance from latest data" \

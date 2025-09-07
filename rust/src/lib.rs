@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::fs::{metadata, read_dir};
-use std::path::Path;
+use std::fs::{OpenOptions, create_dir, metadata, read_dir};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use slate::{Position, Result, Serializable, Storage};
@@ -34,13 +35,14 @@ impl<S: Serializable + Clone + 'static> Default for MemKVS<S> {
 impl<S: Serializable + Clone + 'static> Storage<S> for MemKVS<S> {
   fn first(&mut self) -> Result<(Option<S>, slate::Position)> {
     let kvs = self.kvs.read()?;
-    if kvs.is_empty() { Ok((None, 1)) } else { Ok((kvs.get(&1).cloned(), 1)) }
+    let n = kvs.len() as Position;
+    Ok((kvs.get(&n).cloned(), n + 1))
   }
 
   fn last(&mut self) -> Result<(Option<S>, slate::Position)> {
     let kvs = self.kvs.read()?;
     let n = kvs.len() as Position;
-    if n == 0 { Ok((None, 1)) } else { Ok((kvs.get(&(n + 1)).cloned(), n + 1)) }
+    if n == 0 { Ok((None, 1)) } else { Ok((kvs.get(&n).cloned(), n + 1)) }
   }
 
   fn put(&mut self, position: Position, data: &S) -> Result<slate::Position> {
@@ -59,6 +61,30 @@ impl<S: Serializable + Clone> slate::Reader<S> for MemKVSReader<S> {
     let kvs = self.kvs.read()?;
     Ok(kvs.get(&position).cloned().unwrap())
   }
+}
+
+pub fn unique_file(dir: &Path, prefix: &str, suffix: &str) -> PathBuf {
+  for i in 0..=usize::MAX {
+    let name = if i == 0 { format!("{prefix}{suffix}") } else { format!("{prefix}_{i}{suffix}") };
+    let path = dir.join(name);
+    if OpenOptions::new().write(true).create_new(true).open(&path).is_ok() {
+      return path;
+    }
+  }
+  panic!("Temporary file name space is full: {prefix}_nnn{suffix}");
+}
+
+pub fn unique_dir(dir: &Path, prefix: &str, suffix: &str) -> PathBuf {
+  for i in 0..=usize::MAX {
+    let name = if i == 0 { format!("{prefix}{suffix}") } else { format!("{prefix}_{i}{suffix}") };
+    let path = dir.join(name);
+    match create_dir(&path) {
+      Ok(()) => return path,
+      Err(e) if e.kind() == ErrorKind::AlreadyExists => (),
+      Err(e) => panic!("Error: {e}"),
+    }
+  }
+  panic!("Temporary file name space is full: {prefix}_nnn{suffix}");
 }
 
 pub fn file_size<P: AsRef<Path>>(path: P) -> u64 {

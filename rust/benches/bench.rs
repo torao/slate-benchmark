@@ -6,7 +6,7 @@ use slate_benchmark::hashtree::{HashTree as _, binary::BinaryHashTree};
 fn bench_binaryhashtree(c: &mut Criterion) {
   c.bench_function("binary-hash-tree", |b| {
     let path = Path::new("bench-binaryhashtree.db");
-    let mut tree = BinaryHashTree::create_on_file(path, 10, 10).unwrap();
+    let mut tree = BinaryHashTree::create_on_file(path, 10, 10, |i| i.to_le_bytes().to_vec()).unwrap();
     b.iter(|| {
       for i in 0..tree.size() {
         tree.get(i + 1).unwrap();
