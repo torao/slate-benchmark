@@ -56,13 +56,14 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts1-get-slate-memkvs.csv=Slate (memkvs)" \
     "$dir/$ts1-get-hashtree-file.csv=Binary Tree (file)" \
     "$dir/$ts2-get-iavl-leveldb.csv=IAVL+ (leveldb)" \
-    "$dir/$ts3-get-doltdb.csv=DoltDB (file)" \
+    "$dir/$ts3-get-doltdb-file.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-get.png" \
     --title "Get Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
-    --ymin 0 --ymax 0.03 \
-    --xscale linear \
+    --ymin 0 --ymax 0.017 \
+    --xscale log \
+    --xreverse \
     --no-errorbars --no-scatter
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-get.png" "bench-get.png"
 fi
@@ -79,7 +80,8 @@ if [ ! -z "$ts" ]; then
     --title "Cache Performance (\$T_{\\rm $size}\$ slate file)" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
-    --xscale linear \
+    --xscale log \
+    --xreverse \
     --no-errorbars --no-scatter
   cp "$dir/$ts-cache.png" "bench-cache.png"
 fi

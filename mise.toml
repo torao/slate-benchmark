@@ -5,7 +5,10 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = "{{ 256 }}"
+DATA_SIZE = "{{ 128 * 1024 * 1024 }}"
+TIMEOUT_SECONDS = "{{ 60 * 60 }}"
+# DATA_SIZE = "{{ 256 }}"
+# TIMEOUT_SECONDS = "{{ 5 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 WORK_DIR = "/tmp"
@@ -13,7 +16,10 @@ COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
 [tasks.setup]
 description = "Setup all project dependencies"
-depends = ["setup:*", "{{ os() }}:setup"]
+depends = ["{{ os() }}:setup"]
+run = [
+  "cd python && python -m pip install -r scripts/requirements.txt",
+]
 
 [tasks.clean]
 description = "Clean all build artifacts and results"
@@ -25,6 +31,7 @@ depends = ["build:*"]
 
 [tasks.bench]
 description = "Run benchmark"
+depends = ["build:*"]
 run = [
   # When specified as depends, they are executed in parallel, but must be executed sequentially to
   # measure performance.
@@ -38,9 +45,6 @@ description = "Format source"
 depends = ["fmt:*"]
 
 # -- Python ---
-
-[tasks."setup:python"]
-run = ["cd python && python -m pip install -r scripts/requirements.txt"]
 
 # --- Golang ---
 
@@ -78,8 +82,8 @@ description = "Run Go benchmarks"
 env.IAVL_DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
 depends = ["build:iavl", "build:doltdb"]
 run = [
-  "golang/iavl/iavl $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\"",
-  "golang/doltdb/doltdb $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\"",
+  "golang/iavl/iavl     $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --timeout ${TIMEOUT_SECONDS}s --output \"$RESULTS_DIR\"",
+  "golang/doltdb/doltdb $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --timeout ${TIMEOUT_SECONDS}s --output \"$RESULTS_DIR\"",
 ]
 
 # --- Rust Projects ---
@@ -87,10 +91,12 @@ run = [
 [tasks."setup:rust"]
 
 [tasks."clean:rust"]
-run = ["cd rust && target/release/slate_benchmark --clean && cargo clean"]
+dir = "rust"
+run = ["target/release/slate_benchmark --clean && cargo clean"]
 
 [tasks."fmt:rust"]
-run = "cd rust && cargo fmt"
+dir = "rust"
+run = "cargo fmt"
 
 [tasks."build:rust"]
 description = "Build benchmark for Rust"
@@ -102,7 +108,7 @@ run = "cargo build --release"
 [tasks."bench:rust"]
 description = "Run benchmark"
 depends = ["build:rust"]
-run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --output \"$RESULTS_DIR\""
+run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""
 
 # --- Graph ---
 
@@ -119,7 +125,10 @@ run = ["python bench_info.py \"$WORK_DIR\""]
 
 [tasks."linux:setup"]
 run = [
-  "mkdir -p $RESULTS_DIR",
+  '''
+  mkdir -p $RESULTS_DIR
+  sudo apt install llvm-dev libclang-dev clang
+  ''',
 
   '''
   echo '🎸 Installing LaTeX...'

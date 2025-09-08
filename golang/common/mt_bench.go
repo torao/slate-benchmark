@@ -32,6 +32,7 @@ type Config struct {
 	DataSize  uint64
 	WorkDir   string
 	ResultDir string
+	Timeout   time.Duration
 	SessionID string
 }
 
@@ -41,7 +42,7 @@ func BenchmarkAppend(
 	append_id, volume_id string,
 	measureAppend func(string, uint64) (time.Duration, uint64),
 ) {
-	fmt.Printf("=== Append Benchmark (%s) ===\n", append_id)
+	fmt.Printf("\n=== Append Benchmark (%s) ===\n", append_id)
 	fmt.Println("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials")
 	fmt.Println("--------\t--------\t----------\t-----\t\t------")
 
@@ -53,7 +54,7 @@ func BenchmarkAppend(
 		if i > MinTrials && len(FilterCvSufficient(ns, timeComplexity)) == 0 {
 			break
 		}
-		if time.Since(start) >= MaxDuration {
+		if time.Since(start) >= config.Timeout {
 			fmt.Println("** TIMED OUT **")
 			break
 		}
@@ -100,7 +101,12 @@ func BenchmarkGet(
 	fmt.Println("DataSize\tCV[%]\t\tTrials")
 	fmt.Println("--------\t--------\t----------")
 
-	is := Logspace(1, config.DataSize, QueryDivision)
+	distances := Logspace(1, config.DataSize, QueryDivision)
+	is := make([]uint64, len(distances))
+	for i, distance := range distances {
+		is[i] = config.DataSize - distance + 1
+	}
+
 	rand.Seed(time.Now().UnixNano())
 	timeComplexity := NewStats()
 	start := time.Now()
@@ -111,7 +117,7 @@ func BenchmarkGet(
 				break
 			}
 		}
-		if time.Since(start) >= MaxDuration {
+		if time.Since(start) >= config.Timeout {
 			fmt.Println("** TIMED OUT **")
 			break
 		}
@@ -138,6 +144,7 @@ func ParseCommandLine(names []string, short, long string) *Config {
 		DataSize:  256,
 		WorkDir:   "",
 		ResultDir: "",
+		Timeout:   10 * time.Minute,
 		SessionID: "",
 	}
 
@@ -160,6 +167,7 @@ func ParseCommandLine(names []string, short, long string) *Config {
 	flags := rootCmd.Flags()
 	workDirFlag := flags.StringP("dir", "d", os.TempDir(), "Database directory used for benchmarking")
 	resultDirFlag := flags.StringP("output", "o", DefaultResultDir, "Directory to save result CSV files")
+	timeoutFlag := flags.Duration("timeout", 10*time.Minute, "Benchmark timeout (e.g., 30s, 5m)")
 	sessionIdFlag := flags.StringP("session", "s", time.Now().Format("20060102150405"), "Session name for result file naming")
 	cleanFlag := flags.BoolP("clean", "c", false, "Remove all cached files and exit")
 
@@ -170,6 +178,7 @@ func ParseCommandLine(names []string, short, long string) *Config {
 
 	config.WorkDir = CreateDirectory(*workDirFlag)
 	config.ResultDir = CreateDirectory(*resultDirFlag)
+	config.Timeout = *timeoutFlag
 	config.SessionID = *sessionIdFlag
 
 	if *cleanFlag {
@@ -193,6 +202,7 @@ func PrintSystemInfo(title, dbType string, config *Config) {
 	fmt.Printf("Max data size: %d\n", config.DataSize)
 	fmt.Printf("Max trials: %d\n", MaxTrials)
 	fmt.Printf("Min trials: %d\n", MinTrials)
+	fmt.Printf("Timeout: %v\n", config.Timeout)
 	fmt.Printf("StdDev threshold: %.1f%%\n", CVThreshold*100)
 	fmt.Printf("Data type: 8-byte integers\n")
 	fmt.Printf("Append test divisions: %d\n", AppendDivision)

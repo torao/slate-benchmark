@@ -146,6 +146,11 @@ def plot_multiple_files(file_args, args):
         stats = calculate_stats(df)
         single = all(c == 1 for c in stats["count"])
 
+        # Xを最大値からの相対距離に変換
+        if args.xreverse:
+          x_max = max(stats["X"])
+          stats["X"] = [x_max - x + 1 for x in stats["X"]]
+
         # 散布図（全測定値）を薄く表示
         if not args.no_scatter:
             plt.scatter(
@@ -281,6 +286,7 @@ def main():
     parser.add_argument("--xmax", type=float, help="X軸最大値")
     parser.add_argument("--ymin", type=float, help="Y軸最小値")
     parser.add_argument("--ymax", type=float, help="Y軸最大値")
+    parser.add_argument("--xreverse", action="store_true", help="X最大値からの相対距離に変換 (デフォルト: False)")
 
     # スケール設定
     parser.add_argument(

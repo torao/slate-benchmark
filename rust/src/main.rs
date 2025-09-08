@@ -21,23 +21,31 @@ mod stat;
 
 #[derive(Parser)]
 #[command(name = "slate-bench")]
-#[command(author, version, about = "Benchmark file operations with configurable output directory")]
+#[command(author, version, about = "Slateベンチマークツール - ファイル操作のパフォーマンステストを実行します")]
 struct Args {
+  /// ベンチマークで使用するデータサイズ（エントリ数）
   #[arg(default_value_t = 256u64)]
   data_size: u64,
 
-  /// Output directory for benchmark results and working temporary files
+  /// ベンチマーク実行時の作業用一時ファイルを格納するディレクトリ
   #[arg(short, long, default_value_t = std::env::temp_dir().to_string_lossy().into_owned())]
   dir: String,
 
+  /// ベンチマーク結果（CSVファイル）を出力するディレクトリ
   #[arg(short, long, default_value_t = {std::env::current_dir().unwrap().to_string_lossy().into_owned()})]
   output: String,
 
+  /// ベンチマークセッションの識別子（ファイル名に使用されます）
   #[arg(short, long, default_value_t = Local::now().format("%Y%m%d%H%M%S").to_string())]
   session: String,
 
+  /// 作業用ディレクトリをクリーンアップして終了
   #[arg(short, long, default_value_t = false)]
   clean: bool,
+
+  /// ベンチマークの最大実行時間（秒）
+  #[arg(short = 't', long, default_value_t = 600)]
+  timeout: u64,
 }
 
 fn main() -> Result<()> {
@@ -163,7 +171,7 @@ impl Experiment {
     let stability_threshold = 0.05;
     let min_trials = 5;
     let max_trials = 1000;
-    let max_duration = Duration::from_secs(10 * 60);
+    let max_duration = Duration::from_secs(args.timeout);
     Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
   }
 
@@ -265,14 +273,14 @@ impl Case {
       Scale::Linear => linspace(self.min_n, self.max_n, self.division),
       Scale::Log => logspace(self.min_n, self.max_n, self.division),
       Scale::BestCase => {
-        let (ll, _) = entry_access_distance_limits(self.max_n);
+        let (_, ll) = entry_access_distance_limits(self.max_n);
         ll.into_iter()
           .enumerate()
           .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
           .collect::<Vec<_>>()
       }
       Scale::WorstCase => {
-        let (_, ul) = entry_access_distance_limits(self.max_n);
+        let (ul, _) = entry_access_distance_limits(self.max_n);
         ul.into_iter()
           .enumerate()
           .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
@@ -365,7 +373,7 @@ impl Case {
 
     let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
-    let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
+    let mut gauge = self.gauge();
     let start = Instant::now();
     for trials in 0..self.max_trials {
       if trials > self.min_trials {
@@ -405,7 +413,7 @@ impl Case {
     CUT: ProveCUT,
   {
     println!("\n=== Prove Benchmark ({id}) ===\n");
-    let mut gauge = self.gauge().iter().map(|i| self.max_n - i + 1).collect::<Vec<_>>();
+    let mut gauge = self.gauge();
 
     print!("Creating {} files with one difference each: ", gauge.len());
     let (errs, targets): (Vec<Error>, Vec<_>) = gauge

@@ -4,27 +4,25 @@ This repository contains benchmarks for the reference implementation of [Slate](
 
 ## Overview
 
-Slate is an append-optimized Hash Tree (Merkle Tree) structure designed for efficient storage and retrieval of time-series data. This benchmark suite evaluates its performance characteristics against other data structures.
+Slate is an append-optimized Hash Tree (Merkle Tree) structure designed for efficient storage and retrieval of time-series data or distributed transaction log. This benchmark suite evaluates its performance characteristics against other data structures.
 
 ## Requirements
 
-- Rust 1.88.0 or later
-- Cargo
+- Ubuntu 24.02
 
 ## Running Benchmarks
 
-```bash
-# perform benchmarking by specifying the directory to be used for I/O
-cargo run --release -- /tmp
-```
-
-I've confirmed that this works on Windows and Linux (probably also on mac OS).
-CMake and C-compiler are required to build RocksDB with `cargo build`.
+All necessary set-up is done by the `setup` task of `mise`. You can change variables in [mise.toml] to change the data
+size and the directory (storage device) used in benchmark.
 
 ```bash
-sudo apt install llvm-dev libclang-dev clang
-```
-
-```bash
+mise run setup
 mise run bench
+```
+
+The results are stored in the `results/` directory in CSV format. These results can then be used to create a graph using
+`. /run.sh` to create a graph.
+
+```bash
+./run.sh
 ```
