@@ -21,8 +21,8 @@ mise run bench
 ```
 
 The results are stored in the `results/` directory in CSV format. These results can then be used to create a graph using
-`. /run.sh` to create a graph.
+`. /make-plots.sh` to create a graph.
 
 ```bash
-./run.sh
+./make-plots.sh
 ```

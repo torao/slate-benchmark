@@ -43,7 +43,7 @@ def entry_access_distance(k: int, n: int):
     if contains(i, j, k):
       start_val = range_inclusive(i, j)[0]
       cnt_ones = bin(k - start_val).count("1")
-      return j - cnt_ones + (1 if i != n else 0)
+      return float(j - cnt_ones + (1 if i != n else 0))
   return None
 
 # def worst_best(n):
@@ -59,8 +59,8 @@ def entry_access_distance(k: int, n: int):
 #   pass
 
 def main():
-  #N = pow2e(8) + pow2e(6) + pow2e(5)
-  N = pow2e(2)
+  N = pow2e(8) + pow2e(6) + pow2e(5)
+  #N = pow2e(2)
   H = ceil_log2(N)
   ks = np.arange(1, N + 1, dtype=np.int64)
   ds = [entry_access_distance(k, N) for k in ks]

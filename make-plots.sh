@@ -13,7 +13,7 @@ ts1=$(latest_timestamp "volume-slate")
 ts2=$(latest_timestamp "volume-iavl")
 ts3=$(latest_timestamp "volume-doltdb")
 if [ ! -z "$ts1" ]; then
-  python3 scripts/scatter-plot2.py \
+  python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-volume-slate-file.csv=Slate (file)" \
     "$dir/$ts1-volume-slate-rocksdb.csv=Slate (rocksdb)" \
     "$dir/$ts2-volume-iavl-leveldb.csv=IAVL+ (leveldb)" \
@@ -30,7 +30,7 @@ ts1=$(latest_timestamp "append-slate")
 ts2=$(latest_timestamp "append-iavl")
 ts3=$(latest_timestamp "append-doltdb")
 if [ ! -z "$ts1" ]; then
-  python3 scripts/scatter-plot2.py \
+  python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-append-slate-file.csv=Slate (file)" \
     "$dir/$ts1-append-slate-rocksdb.csv=Slate (rocksdb)" \
     "$dir/$ts1-append-slate-memory.csv=Slate (memory)" \
@@ -50,7 +50,7 @@ ts1=$(latest_timestamp "get-slate")
 ts2=$(latest_timestamp "get-iavl")
 ts3=$(latest_timestamp "get-doltdb")
 if [ ! -z "$ts1" ]; then
-  python3 scripts/scatter-plot2.py \
+  python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-get-slate-file.csv=Slate (file)" \
     "$dir/$ts1-get-slate-rocksdb.csv=Slate (rocksdb)" \
     "$dir/$ts1-get-slate-memkvs.csv=Slate (memkvs)" \
@@ -71,7 +71,7 @@ fi
 # Cache
 ts=$(latest_timestamp "cache")
 if [ ! -z "$ts" ]; then
-  python3 scripts/scatter-plot2.py \
+  python3 scripts/scatter-plot-xy.py \
     "$dir/$ts-cache-slate-file-0.csv=Level 0" \
     "$dir/$ts-cache-slate-file-1.csv=Level 1" \
     "$dir/$ts-cache-slate-file-2.csv=Level 2" \
@@ -90,7 +90,7 @@ fi
 ts1=$(latest_timestamp "prove-slate")
 ts2=$(latest_timestamp "query-iavl")
 if [ ! -z "$ts1" ]; then
-  python3 scripts/scatter-plot2.py \
+  python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-prove-slate-file.csv=Slate (file)" \
     "$dir/$ts1-prove-slate-rocksdb.csv=Slate (rocksdb)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" \
