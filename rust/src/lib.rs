@@ -63,6 +63,90 @@ impl<S: Serializable + Clone> slate::Reader<S> for MemKVSReader<S> {
   }
 }
 
+pub struct ZipfDistribution {
+  state: u64,
+  n: u64,
+  cdf: Vec<f64>,
+}
+
+/// パラメータ s の効果：
+/// 0.5: 軽微な偏り
+/// 1.0: 中程度の偏り
+/// 1.5: 強い偏り (推奨)
+/// 2.0: 非常に強い偏り
+impl ZipfDistribution {
+  pub fn new(seed: u64, s: f64, n: u64) -> Self {
+    assert!(s > 0.0);
+    assert!(n >= 1);
+
+    // 各値の累積確率分布を算出
+    let mut cdf = Vec::with_capacity(n as usize);
+    let mut sum = 0.0;
+    for k in 1..=n {
+      let p = (k as f64).powf(-s);
+      sum += p;
+      cdf.push(sum);
+    }
+    for p in &mut cdf {
+      *p /= sum; // 正規化
+    }
+
+    Self { state: seed, n, cdf }
+  }
+
+  pub fn next_u64(&mut self) -> u64 {
+    // (0, 1] 範囲の一様乱数を生成
+    self.state = splitmix64(self.state);
+    let u = ((self.state >> 11) as f64) / ((1u64 << 53) as f64);
+
+    // 二分探索で対応するインデックスを取得
+    match self.cdf.binary_search_by(|p| p.partial_cmp(&u).unwrap()) {
+      Ok(i) => self.n - i as u64,
+      Err(i) => self.n - i as u64 + 1,
+    }
+  }
+}
+
+pub struct ParetoDistribution {
+  seed: u64,
+  alpha: f64, // shape parameter > 0
+}
+
+impl ParetoDistribution {
+  pub fn new(seed: u64, alpha: f64) -> Self {
+    assert!(alpha > 0.0);
+    Self { seed, alpha }
+  }
+
+  /// 1..=n 範囲で切り詰められた (上限 n) パレート分布に従う整数を生成します。
+  pub fn next_u64(&mut self, n: u64) -> u64 {
+    assert!(n >= 1);
+
+    // (0, 1] 範囲の一様乱数を生成
+    self.seed = splitmix64(self.seed);
+    let r = self.seed; // in [0, u64::MAX]
+    let u = (r as f64 + 1.0) / (u128::from(u64::MAX) as f64 + 1.0); // in (0,1]
+
+    let denom = 1.0 - (n as f64).powf(-self.alpha);
+    let x_continuous = if n == 1 {
+      1.0
+    } else {
+      let inner = 1.0 - u * denom;
+      let inner = inner.max((n as f64).powf(-self.alpha)).min(1.0); // inner should be in (n^{-alpha}, 1.0]; guard numeric issues
+      inner.powf(-1.0 / self.alpha)
+    };
+
+    let mut k = x_continuous.floor() as i128;
+    if k < 1 {
+      k = 1;
+    }
+    if k as u64 > n {
+      k = n as i128;
+    }
+    k as u64
+  }
+}
+
 pub fn unique_file(dir: &Path, prefix: &str, suffix: &str) -> PathBuf {
   for i in 0..=usize::MAX {
     let name = if i == 0 { format!("{prefix}{suffix}") } else { format!("{prefix}_{i}{suffix}") };

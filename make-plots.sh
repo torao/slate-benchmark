@@ -19,7 +19,7 @@ if [ ! -z "$ts1" ]; then
     "$dir/$ts2-volume-iavl-leveldb.csv=IAVL+ (leveldb)" \
     "$dir/$ts3-volume-doltdb-file.csv=DoltDB (file)" \
     -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-volume.png" \
-    --title "Volume Performance \$(T_{\\rm 1M})\$" \
+    --title "Volume Performance \$(T_{\\rm $size})\$" \
     --xlabel "Number of data" \
     --ylabel "Storage space used when all data is saved [bytes]"
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-volume.png" "bench-volume.png"
@@ -101,4 +101,28 @@ if [ ! -z "$ts1" ]; then
     --ymin 0 --ymax 0.6 \
     --no-latex --no-errorbars
   cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" "bench-prove.png"
+fi
+
+# Performance distribution of GET requests under skewed access patterns
+ts1=$(latest_timestamp "biased-get")
+if [ ! -z "$ts1" ]; then
+  python3 scripts/histogram-plot.py \
+    "$dir/$ts1-biased-get-slate-file_x.csv"='$s=$' \
+    --output "$dir/$ts1-biased-get-slate-file_x.png" \
+    --title 'Distribution of Access Positions following Zipf Bias $p(i)\propto 1/k^s$' \
+    --xlabel 'Position $i$' \
+    --ylabel 'Frequency $f$' \
+    --bin-width 8 \
+    --chart-type line
+  cp "$dir/$ts1-biased-get-slate-file_x.png" "bench-biased-get-x.png"
+  python3 scripts/histogram-plot.py \
+    "$dir/$ts1-biased-get-slate-file_y.csv"='$s=$' \
+    --output "$dir/$ts1-biased-get-slate-file_y.png" \
+    --title "Distribution of Get Performance for Access with Zipf Bias (\$T_{\\rm $size}\$)" \
+    --xlabel "Time [msec]" \
+    --ylabel 'Frequency $f$' \
+    --xmax 0.02 \
+    --bin-width 0.001 \
+    --chart-type line
+  cp "$dir/$ts1-biased-get-slate-file_y.png" "bench-biased-get-y.png"
 fi

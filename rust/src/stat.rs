@@ -108,23 +108,23 @@ impl Unit {
   }
 }
 
-pub struct Report<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> {
+pub struct XYReport<X: Display + Clone + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> {
   unit: Unit,
   data_set: HashMap<X, Vec<Y>>,
 }
 
-impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> Report<X, Y> {
+impl<X: Display + Clone + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + Display> XYReport<X, Y> {
   pub fn new(unit: Unit) -> Self {
-    Report { unit, data_set: HashMap::new() }
+    XYReport { unit, data_set: HashMap::new() }
   }
 
-  pub fn add(&mut self, x: X, y: Y) -> Stat {
+  pub fn add(&mut self, x: &X, y: Y) -> Stat {
     self.append(x, vec![y])
   }
 
-  pub fn append(&mut self, x: X, mut ys: Vec<Y>) -> Stat {
-    self.data_set.entry(x).or_default().append(&mut ys);
-    self.calculate(x).unwrap()
+  pub fn append(&mut self, x: &X, mut ys: Vec<Y>) -> Stat {
+    self.data_set.entry(x.clone()).or_default().append(&mut ys);
+    self.calculate(&x).unwrap()
   }
 
   pub fn save_xy_to_csv(&self, path: &PathBuf, x_label: &str, y_labels: &str) -> Result<()> {
@@ -132,7 +132,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     let mut writer = BufWriter::new(file);
     writeln!(writer, "{x_label},{y_labels}")?;
 
-    let mut xs = self.data_set.keys().copied().collect::<Vec<_>>();
+    let mut xs = self.data_set.keys().cloned().collect::<Vec<_>>();
     xs.sort_unstable();
     for x in xs.iter() {
       let ys = self.data_set.get(x).unwrap().iter().map(|f| format!("{f}")).collect::<Vec<_>>();
@@ -149,7 +149,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     }
     let mut max = 0.0;
     for x in self.data_set.keys() {
-      let r = self.calculate(*x).unwrap().cv();
+      let r = self.calculate(x).unwrap().cv();
       if r.is_nan() || r.is_infinite() {
         return r;
       }
@@ -173,7 +173,7 @@ impl<X: Display + Copy + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat + 
     }
   }
 
-  pub fn calculate(&self, x: X) -> Option<Stat> {
-    self.data_set.get(&x).map(|ys| Stat::from_vec(self.unit, ys))
+  pub fn calculate(&self, x: &X) -> Option<Stat> {
+    self.data_set.get(x).map(|ys| Stat::from_vec(self.unit, ys))
   }
 }

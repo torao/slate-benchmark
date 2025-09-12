@@ -6,13 +6,15 @@ use clap::Parser;
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
 use rayon::prelude::*;
-use slate_benchmark::{file_count_and_size, file_size, splitmix64};
+use slate_benchmark::{ZipfDistribution, file_count_and_size, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::{self, create_dir_all};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
+
+use crate::stat::{Unit, XYReport};
 
 mod binarytree;
 mod seqfile;
@@ -68,6 +70,18 @@ fn main() -> Result<()> {
     experiment
       .case(&args)?
       .max_n(args.data_size)
+      .max_trials(500)
+      .measure_the_frequency_of_retrieval_against_positions_by_zipf::<slate::FileSlateCUT>(
+        "biased-get-slate-file",
+        0,
+      )?;
+  }
+
+  #[cfg(false)]
+  {
+    experiment
+      .case(&args)?
+      .max_n(args.data_size)
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
@@ -79,7 +93,7 @@ fn main() -> Result<()> {
       .measure_the_retrieval_time_relative_to_the_position::<binarytree::FileBinaryTreeCUT>("get-hashtree-file", 1)?;
   }
 
-  #[cfg(true)]
+  #[cfg(false)]
   {
     experiment
       .case(&args)?
@@ -93,7 +107,7 @@ fn main() -> Result<()> {
       .measure_the_append_time_relative_to_the_data_amount::<slate::MemSlateCUT>("slate-memory")?;
   }
 
-  #[cfg(true)]
+  #[cfg(false)]
   {
     for level in 0..=3 {
       experiment
@@ -110,7 +124,7 @@ fn main() -> Result<()> {
     }
   }
 
-  #[cfg(true)]
+  #[cfg(false)]
   {
     experiment
       .case(&args)?
@@ -308,19 +322,19 @@ impl Case {
     println!("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials");
     println!("--------\t--------\t----------\t-----\t\t------");
 
-    let mut space_complexity = stat::Report::new(stat::Unit::Bytes);
-    let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
+    let mut space_complexity = stat::XYReport::new(stat::Unit::Bytes);
+    let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let gauge = self.gauge();
     let start = Instant::now();
     for trials in 0..self.max_trials {
       if trials > self.min_trials && filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold).is_empty() {
-        let s = time_complexity.calculate(self.max_n).unwrap();
+        let s = time_complexity.calculate(&self.max_n).unwrap();
         println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
         break;
       }
       if start.elapsed() > self.max_duration {
         println!("** TIMED OUT **");
-        let s = time_complexity.calculate(self.max_n).unwrap();
+        let s = time_complexity.calculate(&self.max_n).unwrap();
         println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
         break;
       }
@@ -330,14 +344,14 @@ impl Case {
       for n in gauge.iter() {
         let (size, time) = CUT::append(&target, *n)?;
         if trials == 0 {
-          space_complexity.add(*n, size);
+          space_complexity.add(n, size);
         }
         cum_time += time;
-        time_complexity.add(*n, cum_time.as_nanos() as f64 / 1000.0 / 1000.0);
+        time_complexity.add(n, cum_time.as_nanos() as f64 / 1000.0 / 1000.0);
       }
       CUT::remove(&target)?;
       if trials % 100 == 99 {
-        let s = time_complexity.calculate(self.max_n).unwrap();
+        let s = time_complexity.calculate(&self.max_n).unwrap();
         println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials + 1);
       }
     }
@@ -371,7 +385,7 @@ impl Case {
     println!("DataSize\tCV[%]\t\tTrials");
     println!("--------\t--------\t----------");
 
-    let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
+    let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
     let mut gauge = self.gauge();
     let start = Instant::now();
@@ -392,7 +406,7 @@ impl Case {
       gauge.shuffle(&mut rng);
       let results = CUT::gets(&target, &gauge, cache_size, splitmix64)?;
       for (i, duration) in results {
-        time_complexity.add(i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
+        time_complexity.add(&i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
       }
       if (trials + 1) % 100 == 0 {
         println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
@@ -403,6 +417,61 @@ impl Case {
     // write report
     let path = self.dir_report.join(format!("{}.csv", self.name(id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
+    println!("==> The results have been saved in: {}", path.to_string_lossy());
+    Ok(self)
+  }
+
+  /// Zipf 分布に従うアクセス位置に対するデータ取得時間の頻度を計測します。
+  pub fn measure_the_frequency_of_retrieval_against_positions_by_zipf<CUT>(
+    self,
+    id: &str,
+    cache_size: usize,
+  ) -> Result<Self>
+  where
+    CUT: GetCUT,
+  {
+    println!("\n=== Zipf Get Benchmark ({id}) ===\n");
+
+    // データベースを作成
+    println!("Creating database with {} entries...", self.max_n);
+    let t0 = Instant::now();
+    let target = CUT::prepare(&self, id, self.max_n, splitmix64)?;
+    let t = t0.elapsed();
+    println!("created: {:.3} [msec]", t.as_nanos() as f64 / 1000.0 / 1000.0);
+
+    println!("Shape\t\tDataSize\tMean\t\tStdDev\t\tMax\t\tTrials");
+    println!("--------\t--------\t--------\t--------\t--------\t----------");
+
+    let mut position_frequency = XYReport::new(Unit::Bytes);
+    let mut time_frequency = XYReport::new(Unit::Milliseconds);
+    let mut batch = Vec::with_capacity(self.max_trials);
+    for s in [0.5, 1.2, 1.5, 2.0] {
+      let x_label = format!("{s:.1}");
+      let mut dist = ZipfDistribution::new(100, s, self.max_n - 1);
+      for _ in 0..self.max_trials {
+        batch.truncate(0);
+        while batch.len() < batch.capacity() {
+          batch.push(dist.next_u64());
+        }
+      }
+
+      let results = CUT::gets(&target, &batch, cache_size, splitmix64)?;
+      time_frequency
+        .append(&x_label, results.iter().map(|(_, d)| d.as_nanos() as f64 / 1000.0 / 1000.0).collect::<Vec<_>>());
+      position_frequency.append(&x_label, batch.clone());
+      let stat = time_frequency.calculate(&x_label).unwrap();
+      println!(
+        "{}\t\t{}\t\t{:.3}\t\t{:.3}\t\t{:.3}\t\t{}",
+        x_label, self.max_n, stat.mean, stat.std_dev, stat.max, self.max_trials
+      );
+    }
+    CUT::remove(&target)?;
+
+    // write report
+    let path = self.dir_report.join(format!("{}_x.csv", self.name(id)));
+    position_frequency.save_xy_to_csv(&path, "ZIPF", "POSITION")?;
+    let path = self.dir_report.join(format!("{}_y.csv", self.name(id)));
+    time_frequency.save_xy_to_csv(&path, "ZIPF", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
     Ok(self)
   }
@@ -444,7 +513,7 @@ impl Case {
     println!("--------\t--------\t----------");
 
     let mut rng = rand::rng();
-    let mut time_complexity = stat::Report::new(stat::Unit::Milliseconds);
+    let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let start = Instant::now();
     for trials in 0..self.max_trials {
       if trials > self.min_trials {
@@ -466,7 +535,7 @@ impl Case {
         let target2 = targets.get(&Some(i)).unwrap();
         let (result, elapse) = CUT::prove(target1, target2)?;
         assert_eq!(Some(i), result);
-        time_complexity.add(self.max_n - i + 1, elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+        time_complexity.add(&(self.max_n - i + 1), elapse.as_nanos() as f64 / 1000.0 / 1000.0);
       }
       if trials % 100 == 99 {
         println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
@@ -482,7 +551,7 @@ impl Case {
   }
 }
 
-fn filter_cv_sufficient(gauge: &[u64], ss: &stat::Report<u64, f64>, cv: f64) -> Vec<u64> {
+fn filter_cv_sufficient(gauge: &[u64], ss: &stat::XYReport<u64, f64>, cv: f64) -> Vec<u64> {
   gauge.iter().filter(|i| !ss.is_cv_sufficient(**i, cv)).cloned().collect::<Vec<_>>()
 }
 
