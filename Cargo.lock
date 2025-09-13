@@ -1114,7 +1114,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "slate"
 version = "0.2.0"
-source = "git+https://github.com/torao/slate?rev=302343d#302343ded5c9aaea0d48fd479b7ab5c1bc03b2f3"
+source = "git+https://github.com/torao/slate?rev=4e304e6f#4e304e6f42c2b0722f6e73ba341ed3f10a7ba445"
 dependencies = [
  "blake3",
  "byteorder",
@@ -1180,9 +1180,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.21.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15b61f8f20e3a6f7e0649d825294eaf317edce30f82cf6026e7e4cb9222a7d1e"
+checksum = "84fa4d11fadde498443cca10fd3ac23c951f0dc59e080e9f4b93d4df4e4eea53"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",

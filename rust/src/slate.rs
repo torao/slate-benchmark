@@ -1,37 +1,107 @@
 use std::collections::HashMap;
 use std::fs::{remove_dir_all, remove_file};
-use std::path::PathBuf;
+use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use rocksdb::{DB, DBCompressionType, Options};
 use slate::rocksdb::RocksDBStorage;
-use slate::{BlockStorage, Entry, FileStorage, Index, Position, Prove, Result, Slate, Storage};
-use slate_benchmark::{MemKVS, file_size, splitmix64, unique_dir, unique_file};
+use slate::{Entry, FileStorage, Index, Position, Prove, Result, Slate, Storage};
+use slate_benchmark::{MemKVS, file_size, unique_file};
 
-use crate::{AppendCUT, CUT, Case, GetCUT, ProveCUT};
+use crate::{AppendCUT, CUT, GetCUT, ProveCUT};
 
-trait SlateCUT<S: Storage<Entry>>: CUT {
-  fn create_new(case: &Case, id: &str) -> Result<(Self::T, Slate<S>)>;
-  fn restore(target: &Self::T, cache_size: usize) -> Result<Slate<S>>;
+pub trait StorageFactory<S: Storage<Entry>> {
+  fn name() -> String;
+  fn new_storage(&self) -> Result<S>;
+  fn storage_size(&self) -> Result<u64>;
+  fn clear(&mut self) -> Result<()>;
+  fn alternate(&self) -> Result<Self>
+  where
+    Self: std::marker::Sized;
+}
 
-  fn prepare<F: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: F) -> Result<Self::T> {
-    let (target, mut slate) = Self::create_new(case, id)?;
-    assert!(slate.n() == 0);
+pub struct SlateCUT<S: Storage<Entry>, F: StorageFactory<S>> {
+  factory: Option<F>,
+  slate: Option<Slate<S>>,
+  _phantom: PhantomData<S>,
+}
+
+impl<S: Storage<Entry>, F: StorageFactory<S>> SlateCUT<S, F> {
+  pub fn new(factory: F) -> Result<Self> {
+    let storage = factory.new_storage()?;
+    let slate = Some(Slate::with_cache_level(storage, 0)?);
+    let factory = Some(factory);
+    Ok(Self { factory, slate, _phantom: PhantomData })
+  }
+}
+
+impl<S: Storage<Entry>, F: StorageFactory<S>> Drop for SlateCUT<S, F> {
+  fn drop(&mut self) {
+    drop(self.slate.take());
+    drop(self.factory.take());
+  }
+}
+
+impl<S: Storage<Entry>, F: StorageFactory<S>> CUT for SlateCUT<S, F> {
+  fn implementation(&self) -> String {
+    F::name()
+  }
+}
+
+impl<S: Storage<Entry>, F: StorageFactory<S>> AppendCUT for SlateCUT<S, F> {
+  #[inline(never)]
+  fn append<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<(u64, Duration)> {
+    let slate = self.slate.as_mut().unwrap();
+    assert!(slate.n() <= n);
+    let start = Instant::now();
     while slate.n() < n {
       slate.append(&values(slate.n() + 1).to_le_bytes())?;
     }
-    Ok(target)
+    let elapse = start.elapsed();
+    let size = self.factory.as_ref().unwrap().storage_size()?;
+    Ok((size, elapse))
+  }
+
+  fn clear(&mut self) -> Result<()> {
+    drop(self.slate.take());
+    self.factory.as_mut().unwrap().clear()?;
+    let storage = self.factory.as_ref().unwrap().new_storage()?;
+    self.slate = Some(Slate::with_cache_level(storage, 0)?);
+    Ok(())
+  }
+}
+
+impl<S: Storage<Entry>, F: StorageFactory<S>> GetCUT for SlateCUT<S, F> {
+  fn set_cache_level(&mut self, cache_level: usize) -> Result<()> {
+    if self.slate.as_ref().unwrap().cache().level() != cache_level {
+      drop(self.slate.take());
+      let storage = self.factory.as_ref().unwrap().new_storage()?;
+      self.slate = Some(Slate::with_cache_level(storage, cache_level)?);
+    }
+    Ok(())
+  }
+
+  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+    let slate = self.slate.as_mut().unwrap();
+    if slate.n() != n {
+      assert!(slate.n() < n, "slate {} is larger than {n}", slate.n());
+      println!("Preparing database with {n} entries...");
+      let start = Instant::now();
+      while slate.n() < n {
+        let n = slate.n() + 1;
+        slate.append(&values(n).to_le_bytes())?;
+      }
+      let elapse = start.elapsed();
+      println!("created: {:.3} [msec]", elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+    }
+    Ok(())
   }
 
   #[inline(never)]
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>> {
-    let slate = Self::restore(target, cache_size)?;
+  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+    let slate = self.slate.as_mut().unwrap();
     let mut results = Vec::with_capacity(is.len());
     for i in is.iter().cloned() {
       assert!(slate.n() >= i, "n={} less than i={}", slate.n(), i);
@@ -43,29 +113,23 @@ trait SlateCUT<S: Storage<Entry>>: CUT {
     }
     Ok(results)
   }
+}
 
+impl<S, F> ProveCUT for SlateCUT<S, F>
+where
+  S: Storage<Entry> + Sync + Send,
+  F: StorageFactory<S> + Sync + Send,
+{
   #[inline(never)]
-  fn append(target: &Self::T, n: Index) -> Result<Duration> {
-    let mut slate = Self::restore(target, 0)?;
-    assert!(slate.n() <= n);
-    let start = Instant::now();
-    while slate.n() < n {
-      slate.append(&splitmix64(slate.n() + 1).to_le_bytes())?;
-    }
-    let elapse = start.elapsed();
-    Ok(elapse)
-  }
-
-  #[inline(never)]
-  fn prove(path1: &Self::T, path2: &Self::T) -> Result<(Option<u64>, Duration)> {
-    let db1 = Self::restore(path1, 0)?;
-    let db2 = Self::restore(path2, 0)?;
-    let mut query1 = db1.snapshot().query()?;
-    let mut query2 = db2.snapshot().query()?;
+  fn prove(&self, other: &Self) -> Result<(Option<u64>, Duration)> {
+    let slate1 = self.slate.as_ref().unwrap();
+    let slate2 = other.slate.as_ref().unwrap();
+    let mut query1 = slate1.snapshot().query()?;
+    let mut query2 = slate2.snapshot().query()?;
 
     let start = Instant::now();
-    let mut auth_path1 = query1.get_auth_path(db1.n())?.unwrap();
-    let mut auth_path2 = query2.get_auth_path(db1.n())?.unwrap();
+    let mut auth_path1 = query1.get_auth_path(slate1.n())?.unwrap();
+    let mut auth_path2 = query2.get_auth_path(slate2.n())?.unwrap();
     let diff = loop {
       match auth_path2.prove(&auth_path1)? {
         Prove::Identical => break None,
@@ -82,187 +146,163 @@ trait SlateCUT<S: Storage<Entry>>: CUT {
     let elapse = start.elapsed();
     Ok((diff, elapse))
   }
+
+  fn alternate(&self) -> Result<Self> {
+    Self::new(self.factory.as_ref().unwrap().alternate()?)
+  }
 }
 
 // --- MemKVS ---
 
-#[derive(Default)]
-pub struct MemSlateCUT {}
+pub struct MemKVSFactory {
+  cache: Arc<RwLock<HashMap<Position, Entry>>>,
+}
 
-impl SlateCUT<MemKVS<Entry>> for MemSlateCUT {
-  fn create_new(case: &Case, _id: &str) -> Result<(Self::T, Slate<MemKVS<Entry>>)> {
-    let target = Arc::new(RwLock::new(HashMap::with_capacity(case.max_n as usize)));
-    let storage = MemKVS::with_kvs(target.clone());
-    let slate = Slate::new(storage)?;
-    Ok((target, slate))
-  }
-
-  fn restore(target: &Self::T, _cache_size: usize) -> Result<Slate<MemKVS<Entry>>> {
-    let storage = MemKVS::with_kvs(target.clone());
-    let slate = Slate::new(storage)?;
-    Ok(slate)
+impl MemKVSFactory {
+  pub fn new(capacity: usize) -> Self {
+    let cache = Arc::new(RwLock::new(HashMap::with_capacity(capacity)));
+    Self { cache }
   }
 }
 
-impl CUT for MemSlateCUT {
-  type T = Arc<RwLock<HashMap<Position, Entry>>>;
-
-  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T> {
-    <Self as SlateCUT<MemKVS<Entry>>>::prepare(case, id, n, values)
+impl StorageFactory<MemKVS<Entry>> for MemKVSFactory {
+  fn name() -> String {
+    String::from("slate-memkvs")
   }
 
-  fn remove(target: &Self::T) -> Result<()> {
-    target.write()?.clear();
+  fn new_storage(&self) -> Result<MemKVS<Entry>> {
+    Ok(MemKVS::with_kvs(self.cache.clone()))
+  }
+
+  fn storage_size(&self) -> Result<u64> {
+    Ok(0u64)
+  }
+
+  fn clear(&mut self) -> Result<()> {
+    self.cache.write()?.clear();
     Ok(())
   }
-}
 
-impl GetCUT for MemSlateCUT {
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>> {
-    <Self as SlateCUT<MemKVS<Entry>>>::gets(target, is, cache_size, values)
-  }
-}
-
-impl AppendCUT for MemSlateCUT {
-  fn append(target: &Self::T, n: Index) -> Result<(u64, Duration)> {
-    let time = <Self as SlateCUT<MemKVS<Entry>>>::append(target, n)?;
-    Ok((0u64, time))
-  }
-}
-
-impl ProveCUT for MemSlateCUT {
-  fn prove(path1: &Self::T, path2: &Self::T) -> Result<(Option<u64>, Duration)> {
-    <Self as SlateCUT<MemKVS<Entry>>>::prove(path1, path2)
+  fn alternate(&self) -> Result<Self> {
+    Ok(Self::new(self.cache.read()?.capacity()))
   }
 }
 
 // --- File --
 
-#[derive(Default)]
-pub struct FileSlateCUT {}
+pub struct FileFactory {
+  path: PathBuf,
+}
 
-impl CUT for FileSlateCUT {
-  type T = PathBuf;
-  fn prepare<F: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: F) -> Result<Self::T> {
-    <Self as SlateCUT<FileStorage>>::prepare(case, id, n, values)
+impl FileFactory {
+  pub fn new(dir: &Path) -> Self {
+    let path = unique_file(dir, &Self::name(), ".db");
+    Self { path }
   }
-  fn remove(path: &Self::T) -> Result<()> {
-    if path.exists() {
-      remove_file(path)?;
+}
+
+impl Drop for FileFactory {
+  fn drop(&mut self) {
+    if let Err(e) = self.clear() {
+      eprintln!("WARN: Failed to delete file {:?}: {}", self.path, e);
+    }
+  }
+}
+
+impl StorageFactory<FileStorage> for FileFactory {
+  fn name() -> String {
+    String::from("slate-file")
+  }
+
+  fn new_storage(&self) -> Result<FileStorage> {
+    FileStorage::from_file(&self.path, false)
+  }
+
+  fn storage_size(&self) -> Result<u64> {
+    Ok(file_size(&self.path))
+  }
+
+  fn clear(&mut self) -> Result<()> {
+    if self.path.exists() {
+      remove_file(&self.path)?;
     }
     Ok(())
   }
-}
 
-impl SlateCUT<FileStorage> for FileSlateCUT {
-  fn create_new(case: &Case, id: &str) -> Result<(Self::T, Slate<FileStorage>)> {
-    let path = unique_file(&case.dir_work(id), "slate-file", ".db");
-    let db = Slate::new_on_file(&path, false).unwrap();
-    Ok((path, db))
-  }
-
-  fn restore(target: &Self::T, cache_size: usize) -> Result<Slate<FileStorage>> {
-    let storage = BlockStorage::from_file(target, false)?;
-    Slate::with_cache_level(storage, cache_size)
-  }
-}
-
-impl GetCUT for FileSlateCUT {
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>> {
-    <Self as SlateCUT<FileStorage>>::gets(target, is, cache_size, values)
-  }
-}
-
-impl AppendCUT for FileSlateCUT {
-  fn append(target: &Self::T, n: Index) -> Result<(u64, Duration)> {
-    let time = <Self as SlateCUT<FileStorage>>::append(target, n)?;
-    let size = file_size(target);
-    Ok((size, time))
-  }
-}
-
-impl ProveCUT for FileSlateCUT {
-  fn prove(path1: &Self::T, path2: &Self::T) -> Result<(Option<u64>, Duration)> {
-    <Self as SlateCUT<FileStorage>>::prove(path1, path2)
+  fn alternate(&self) -> Result<Self> {
+    Ok(Self::new(&PathBuf::from(self.path.parent().unwrap())))
   }
 }
 
 // --- RocksDB ---
 
-#[derive(Default)]
-pub struct RocksDBSlateCUT {}
+pub struct RocksDBFactory {
+  lock_file: PathBuf,
+}
 
-impl CUT for RocksDBSlateCUT {
-  type T = PathBuf;
-  fn prepare<F: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: F) -> Result<Self::T> {
-    <Self as SlateCUT<RocksDBStorage>>::prepare(case, id, n, values)
+impl RocksDBFactory {
+  pub fn new(dir: &Path) -> Self {
+    let lock_file = unique_file(dir, &Self::name(), ".lock");
+    assert!(lock_file.is_file());
+    Self { lock_file }
   }
-  fn remove(path: &Self::T) -> Result<()> {
-    if path.exists() {
-      remove_dir_all(path)?;
-    }
-    Ok(())
+
+  pub fn data_dir(&self) -> PathBuf {
+    let mut dir = self.lock_file.clone();
+    dir.set_extension("db");
+    dir
   }
 }
 
-impl SlateCUT<RocksDBStorage> for RocksDBSlateCUT {
-  fn create_new(case: &Case, id: &str) -> Result<(Self::T, Slate<RocksDBStorage>)> {
-    let lock = unique_dir(&case.dir_work(id), "slate-rocksdb", "");
-    let path = case.dir_work(id).join(format!("{}.db", lock.file_name().unwrap().to_string_lossy()));
-    assert!(!path.exists());
+impl Drop for RocksDBFactory {
+  fn drop(&mut self) {
+    if let Err(e) = self.clear() {
+      eprintln!("WARN: Failed to delete directory {:?}: {}", self.data_dir(), e);
+    }
+    if self.lock_file.exists() {
+      if let Err(e) = remove_file(&self.lock_file) {
+        eprintln!("WARN: Failed to delete file {:?}: {}", self.lock_file, e);
+      }
+    }
+  }
+}
+
+impl StorageFactory<RocksDBStorage> for RocksDBFactory {
+  fn name() -> String {
+    String::from("slate-rocksdb")
+  }
+
+  fn new_storage(&self) -> Result<RocksDBStorage> {
+    let path = self.data_dir();
     let mut opts = Options::default();
     opts.create_if_missing(true);
     opts.set_compression_type(DBCompressionType::None);
     opts.set_compression_per_level(&[DBCompressionType::None; 7]);
-    let db = Arc::new(RwLock::new(DB::open(&opts, &path).unwrap()));
-    let storage = RocksDBStorage::new(db, &[], false);
-    let db = Slate::new(storage)?;
-    Ok((path, db))
+    match DB::open(&opts, &path) {
+      Ok(db) => {
+        let db = Arc::new(RwLock::new(db));
+        Ok(RocksDBStorage::new(db, &[], false))
+      }
+      Err(err) => {
+        eprintln!("ERROR: fail to open RocksDB: {path:?}");
+        Err(err)?
+      }
+    }
   }
 
-  fn restore(target: &Self::T, cache_size: usize) -> Result<Slate<RocksDBStorage>> {
-    let mut opts = Options::default();
-    opts.create_if_missing(false);
-    opts.set_compression_type(DBCompressionType::None);
-    opts.set_compression_per_level(&[DBCompressionType::None; 7]);
-    let db = Arc::new(RwLock::new(DB::open(&opts, target).unwrap()));
-    let storage = RocksDBStorage::new(db, &[], false);
-    let db = Slate::with_cache_level(storage, cache_size)?;
-    Ok(db)
+  fn storage_size(&self) -> Result<u64> {
+    Ok(file_size(self.data_dir()))
   }
-}
 
-impl GetCUT for RocksDBSlateCUT {
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>> {
-    <Self as SlateCUT<RocksDBStorage>>::gets(target, is, cache_size, values)
+  fn clear(&mut self) -> Result<()> {
+    let dir = self.data_dir();
+    if dir.exists() {
+      remove_dir_all(&dir)?;
+    }
+    Ok(())
   }
-}
 
-impl AppendCUT for RocksDBSlateCUT {
-  fn append(target: &Self::T, n: Index) -> Result<(u64, Duration)> {
-    let time = <Self as SlateCUT<RocksDBStorage>>::append(target, n)?;
-    let size = file_size(target);
-    Ok((size, time))
-  }
-}
-
-impl ProveCUT for RocksDBSlateCUT {
-  fn prove(path1: &Self::T, path2: &Self::T) -> Result<(Option<u64>, Duration)> {
-    <Self as SlateCUT<RocksDBStorage>>::prove(path1, path2)
+  fn alternate(&self) -> Result<Self> {
+    Ok(Self::new(&PathBuf::from(self.lock_file.parent().unwrap())))
   }
 }

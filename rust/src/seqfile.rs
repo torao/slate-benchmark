@@ -1,47 +1,116 @@
 use slate::{Index, Result};
-use slate_benchmark::{file_size, splitmix64, unique_file};
-use std::fs::{OpenOptions, remove_file};
-use std::io::Write;
-use std::path::PathBuf;
+use slate_benchmark::unique_file;
+use std::fs::{File, OpenOptions, remove_file};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::{AppendCUT, CUT, Case};
+use crate::{AppendCUT, CUT, GetCUT};
 
-#[derive(Default)]
-pub struct SeqFileCUT {}
+pub struct SeqFileCUT {
+  path: PathBuf,
+  file: Option<File>,
+  cache_level: usize,
+}
+
+impl SeqFileCUT {
+  pub fn new(dir: &Path) -> Result<Self> {
+    let path = unique_file(dir, "seqfile", ".db");
+    let file = Some(OpenOptions::new().create_new(false).append(false).read(true).write(true).open(&path)?);
+    let cache_level = 0;
+    Ok(Self { path, file, cache_level })
+  }
+}
+
+impl Drop for SeqFileCUT {
+  fn drop(&mut self) {
+    drop(self.file.take());
+    if self.path.exists() {
+      if let Err(e) = remove_file(&self.path) {
+        eprintln!("WARN: fail to remove file {:?}: {}", self.path, e);
+      }
+    }
+  }
+}
 
 impl CUT for SeqFileCUT {
-  type T = PathBuf;
+  fn implementation(&self) -> String {
+    String::from("seqfile-file")
+  }
+}
 
-  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T> {
-    let path = unique_file(&case.dir_work(id), "seqfile", ".db");
-    let mut file = OpenOptions::new().create_new(false).append(false).write(true).open(&path)?;
-    for i in 1..=n {
-      file.write_all(&values(i).to_le_bytes())?;
-    }
-    Ok(path)
+impl GetCUT for SeqFileCUT {
+  fn set_cache_level(&mut self, cache_size: usize) -> Result<()> {
+    self.cache_level = cache_size;
+    Ok(())
   }
 
-  fn remove(path: &Self::T) -> Result<()> {
-    if path.exists() {
-      remove_file(path)?;
+  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+    let file = self.file.as_mut().unwrap();
+    let file_size = file.metadata()?.len();
+    assert!(file_size % 8 == 0, "{file_size} is not a multiple of u64");
+    let size = file_size / 8;
+    assert!(size <= n);
+    for i in size + 1..=n {
+      file.write_all(&values(i).to_le_bytes())?;
     }
     Ok(())
+  }
+
+  #[inline(never)]
+  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+    let file = self.file.as_mut().unwrap();
+    let file_size = file.seek(SeekFrom::End(0))?;
+    assert!(file_size % 8 == 0);
+    let mut buffer = vec![0u8; 8 * (1 << self.cache_level)];
+    let mut results = Vec::with_capacity(is.len());
+    for i in is.iter().copied() {
+      let mut position = file_size;
+      let mut i_current = file_size / 8;
+      let start = Instant::now();
+      'hoge: while position > 0 {
+        let read_size = buffer.len().min(position as usize);
+        position -= read_size as u64;
+        file.seek(SeekFrom::Start(position))?;
+        file.read_exact(&mut buffer[..read_size])?;
+        for chunk in buffer[..read_size].rchunks_exact(8) {
+          let value = u64::from_le_bytes(chunk.try_into().unwrap());
+          if i_current == i {
+            let elapse = start.elapsed();
+            assert_eq!(values(i), value);
+            results.push((i, elapse));
+            break 'hoge;
+          }
+          i_current -= 1;
+        }
+      }
+    }
+    assert_eq!(is.len(), results.len());
+    Ok(results)
   }
 }
 
 impl AppendCUT for SeqFileCUT {
   #[inline(never)]
-  fn append(path: &Self::T, n: Index) -> Result<(u64, Duration)> {
-    let mut file = OpenOptions::new().append(true).open(path)?;
-    let begin = file.metadata()?.len() / 8;
-    assert!(begin <= n);
+  fn append<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<(u64, Duration)> {
+    let file = self.file.as_mut().unwrap();
+    let file_size = file.metadata()?.len();
+    let begin = file_size / 8;
+    assert!(file_size % 8 == 0, "{file_size} is not a multiple of u64");
+    assert!(begin <= n, "begin={begin} is larger than n={n}");
+    file.seek(SeekFrom::End(0))?;
     let start = Instant::now();
-    for i in begin + 1..=n {
-      file.write_all(&splitmix64(i).to_le_bytes())?;
+    for i in (begin + 1)..=n {
+      file.write_all(&values(i).to_le_bytes())?;
     }
     let elapse = start.elapsed();
-    let size = file_size(path);
+    let size = file.metadata()?.len();
     Ok((size, elapse))
+  }
+
+  fn clear(&mut self) -> Result<()> {
+    let file = self.file.as_mut().unwrap();
+    file.set_len(0)?;
+    Ok(())
   }
 }

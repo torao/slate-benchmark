@@ -33,7 +33,7 @@ if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-append-slate-file.csv=Slate (file)" \
     "$dir/$ts1-append-slate-rocksdb.csv=Slate (rocksdb)" \
-    "$dir/$ts1-append-slate-memory.csv=Slate (memory)" \
+    "$dir/$ts1-append-slate-memkvs.csv=Slate (memkvs)" \
     "$dir/$ts1-append-seqfile-file.csv=Unindexed Sequence File" \
     "$dir/$ts2-append-iavl-leveldb.csv=IAVL+ (leveldb)" \
     "$dir/$ts3-append-doltdb-file.csv=DoltDB (file)" \
@@ -69,13 +69,13 @@ if [ ! -z "$ts1" ]; then
 fi
 
 # Cache
-ts=$(latest_timestamp "cache")
+ts=$(latest_timestamp "cache0")
 if [ ! -z "$ts" ]; then
   python3 scripts/scatter-plot-xy.py \
-    "$dir/$ts-cache-slate-file-0.csv=Level 0" \
-    "$dir/$ts-cache-slate-file-1.csv=Level 1" \
-    "$dir/$ts-cache-slate-file-2.csv=Level 2" \
-    "$dir/$ts-cache-slate-file-3.csv=Level 3" \
+    "$dir/$ts-cache0-slate-file.csv=Level 0" \
+    "$dir/$ts-cache1-slate-file.csv=Level 1" \
+    "$dir/$ts-cache2-slate-file.csv=Level 2" \
+    "$dir/$ts-cache3-slate-file.csv=Level 3" \
     -o "$dir/$ts-cache.png" \
     --title "Cache Performance (\$T_{\\rm $size}\$ slate file)" \
     --xlabel "Distance from latest data" \

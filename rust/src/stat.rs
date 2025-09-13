@@ -124,7 +124,7 @@ impl<X: Display + Clone + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat +
 
   pub fn append(&mut self, x: &X, mut ys: Vec<Y>) -> Stat {
     self.data_set.entry(x.clone()).or_default().append(&mut ys);
-    self.calculate(&x).unwrap()
+    self.calculate(x).unwrap()
   }
 
   pub fn save_xy_to_csv(&self, path: &PathBuf, x_label: &str, y_labels: &str) -> Result<()> {

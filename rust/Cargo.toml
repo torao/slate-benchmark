@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-slate = { git = "https://github.com/torao/slate", rev = "302343d", features = ["rocksdb", "blake3"] }
+slate = { git = "https://github.com/torao/slate", rev = "4e304e6f", features = ["rocksdb", "blake3"] }
 clap = { version = "4.5.47", features = ["derive"] }
 byteorder = "1.5"
-tempfile = "3.21.0"
+tempfile = "3.22.0"
 thiserror = "2.0.16"
 chrono = "0.4.42"
 rocksdb = { version = "0.24.0", default-features = false, features = [] }

@@ -1,5 +1,5 @@
 use std::fs::remove_file;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use slate::Index;
@@ -7,36 +7,43 @@ use slate::Result;
 use slate_benchmark::hashtree::{HashTree, binary::BinaryHashTree};
 use slate_benchmark::unique_file;
 
-use crate::{CUT, Case, GetCUT};
+use crate::{CUT, GetCUT};
 
 #[derive(Default)]
-pub struct FileBinaryTreeCUT {}
+pub struct FileBinaryTreeCUT {
+  path: PathBuf,
+  cache_level: usize,
+}
+
+impl FileBinaryTreeCUT {
+  pub fn new(dir: &Path, n: u64) -> Result<Self> {
+    assert_eq!((n & (n - 1)), 0, "must be binary");
+    let path = unique_file(dir, "hashtree-file", ".db");
+    let cache_level = 0;
+    Ok(Self { path, cache_level })
+  }
+}
+
+impl Drop for FileBinaryTreeCUT {
+  fn drop(&mut self) {
+    if self.path.exists() {
+      if let Err(e) = remove_file(&self.path) {
+        eprintln!("WARN: fail to remove file {:?}: {}", self.path, e);
+      }
+    }
+  }
+}
 
 impl CUT for FileBinaryTreeCUT {
-  type T = PathBuf;
-
-  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T> {
-    assert_eq!((n & (n - 1)), 0, "must be binary");
-    let target = unique_file(&case.dir_work(id), "hashtree-file", ".db");
-    BinaryHashTree::create_on_file(&target, u64::ilog2(n) as u8 + 1, 0, |i| values(i).to_le_bytes().to_vec())?;
-    Ok(target)
-  }
-
-  fn remove(target: &Self::T) -> Result<()> {
-    remove_file(target)?;
-    Ok(())
+  fn implementation(&self) -> String {
+    String::from("hashtree-file")
   }
 }
 
 impl GetCUT for FileBinaryTreeCUT {
   #[inline(never)]
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>> {
-    let mut bht = BinaryHashTree::from_file(target, cache_size)?;
+  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+    let mut bht = BinaryHashTree::from_file(&self.path, 1 << self.cache_level)?;
     let mut results = Vec::with_capacity(is.len());
     for i in is.iter().cloned() {
       let start = Instant::now();
@@ -46,5 +53,18 @@ impl GetCUT for FileBinaryTreeCUT {
       results.push((i, elapsed))
     }
     Ok(results)
+  }
+
+  fn set_cache_level(&mut self, cache_size: usize) -> Result<()> {
+    self.cache_level = cache_size;
+    Ok(())
+  }
+
+  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+    assert_eq!((n & (n - 1)), 0, "must be binary");
+    BinaryHashTree::create_on_file(&self.path, u64::ilog2(n) as u8 + 1, 1 << self.cache_level, |i| {
+      values(i).to_le_bytes().to_vec()
+    })?;
+    Ok(())
   }
 }

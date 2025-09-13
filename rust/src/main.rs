@@ -1,19 +1,21 @@
 use ::slate::error::Error;
 use ::slate::formula::{entry_access_distance, entry_access_distance_limits};
-use ::slate::{Index, Result};
+use ::slate::{Entry, Index, Result, Storage};
 use chrono::Local;
 use clap::Parser;
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
 use rayon::prelude::*;
-use slate_benchmark::{ZipfDistribution, file_count_and_size, file_size, splitmix64};
+use slate_benchmark::{ZipfDistribution, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::fs::{self, create_dir_all};
+use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use crate::binarytree::FileBinaryTreeCUT;
+use crate::seqfile::SeqFileCUT;
+use crate::slate::{FileFactory, MemKVSFactory, RocksDBFactory, SlateCUT, StorageFactory};
 use crate::stat::{Unit, XYReport};
 
 mod binarytree;
@@ -55,85 +57,55 @@ fn main() -> Result<()> {
 
   // 作業ディレクトリ作成
   let root = PathBuf::from_str(&args.dir).unwrap();
-  create_dir_all(&root)?;
+  fs::create_dir_all(&root)?;
   println!("Working directory: {:?}", &root);
 
   let experiment = Experiment::new(&args)?;
 
   if args.clean {
-    experiment.clean()?;
+    experiment.clean_all_experiments()?;
     return Ok(());
   }
 
-  #[cfg(true)]
+  let dir = experiment.work_dir()?;
+  {
+    let mut cut = SeqFileCUT::new(&dir)?;
+    experiment
+      .run_testunit_append(&mut cut)?
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .clear()?;
+  }
+
+  {
+    let mut cut = FileBinaryTreeCUT::new(&dir, args.data_size)?;
+    experiment
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .clear()?;
+  }
+
+  fn _run_slate_cut<S, F>(experiment: &Experiment, cut: &mut SlateCUT<S, F>) -> Result<()>
+  where
+    S: Storage<Entry> + Sync + Send,
+    F: StorageFactory<S> + Sync + Send,
   {
     experiment
-      .case(&args)?
-      .max_n(args.data_size)
-      .max_trials(500)
-      .measure_the_frequency_of_retrieval_against_positions_by_zipf::<slate::FileSlateCUT>(
-        "biased-get-slate-file",
-        0,
-      )?;
+      .run_testunit_append(cut)?
+      .run_testunit_biased_get(cut)?
+      .run_testunit_uniformed_get(cut)?
+      .run_testunit_cache_level(cut)?
+      .run_testunit_prove(cut)?
+      .clear()?;
+    Ok(())
   }
+  _run_slate_cut(&experiment, &mut SlateCUT::new(MemKVSFactory::new(args.data_size as usize))?)?;
+  _run_slate_cut(&experiment, &mut SlateCUT::new(FileFactory::new(&dir))?)?;
+  _run_slate_cut(&experiment, &mut SlateCUT::new(RocksDBFactory::new(&dir))?)?;
 
-  #[cfg(false)]
-  {
-    experiment
-      .case(&args)?
-      .max_n(args.data_size)
-      .division(100)
-      .scale(Scale::WorstCase)
-      .max_trials(500)
-      .cv_threshold(0.5)
-      .measure_the_retrieval_time_relative_to_the_position::<slate::MemSlateCUT>("get-slate-memkvs", 0)?
-      .measure_the_retrieval_time_relative_to_the_position::<slate::FileSlateCUT>("get-slate-file", 0)?
-      .measure_the_retrieval_time_relative_to_the_position::<slate::RocksDBSlateCUT>("get-slate-rocksdb", 0)?
-      .scale(Scale::Log)
-      .measure_the_retrieval_time_relative_to_the_position::<binarytree::FileBinaryTreeCUT>("get-hashtree-file", 1)?;
-  }
-
-  #[cfg(false)]
-  {
-    experiment
-      .case(&args)?
-      .max_n(args.data_size)
-      .division(10)
-      .min_trials(2)
-      .max_trials(10)
-      .measure_the_append_time_relative_to_the_data_amount::<slate::FileSlateCUT>("slate-file")?
-      .measure_the_append_time_relative_to_the_data_amount::<slate::RocksDBSlateCUT>("slate-rocksdb")?
-      .measure_the_append_time_relative_to_the_data_amount::<seqfile::SeqFileCUT>("seqfile-file")?
-      .measure_the_append_time_relative_to_the_data_amount::<slate::MemSlateCUT>("slate-memory")?;
-  }
-
-  #[cfg(false)]
-  {
-    for level in 0..=3 {
-      experiment
-        .case(&args)?
-        .max_n(args.data_size)
-        .division(64)
-        .scale(Scale::WorstCase)
-        .max_trials(1000)
-        .cv_threshold(0.5)
-        .measure_the_retrieval_time_relative_to_the_position::<slate::FileSlateCUT>(
-          &format!("cache-slate-file-{level}"),
-          level,
-        )?;
-    }
-  }
-
-  #[cfg(false)]
-  {
-    experiment
-      .case(&args)?
-      .max_n(args.data_size)
-      .scale(Scale::WorstCase)
-      .measure_the_prove_time_relative_to_the_position::<slate::FileSlateCUT>("prove-slate-file")?
-      .measure_the_prove_time_relative_to_the_position::<slate::RocksDBSlateCUT>("prove-slate-rocksdb")?;
-  }
-
+  fs::remove_dir_all(&dir)?;
   Ok(())
 }
 
@@ -153,6 +125,7 @@ struct Experiment {
   min_trials: usize,        // 例: 5
   max_trials: usize,        // 例: 100
   max_duration: Duration,   // 例: Duration::from_secs(30),
+  data_size: Index,
 }
 
 pub struct Case {
@@ -176,25 +149,26 @@ impl Experiment {
     let dir_report = PathBuf::from(&args.output);
 
     if !dir.exists() {
-      create_dir_all(&dir)?;
+      fs::create_dir_all(&dir)?;
     }
     if !dir_report.exists() {
-      create_dir_all(&dir)?;
+      fs::create_dir_all(&dir)?;
     }
 
     let stability_threshold = 0.05;
     let min_trials = 5;
     let max_trials = 1000;
     let max_duration = Duration::from_secs(args.timeout);
-    Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
+    let data_size = args.data_size;
+    Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration, data_size })
   }
 
-  pub fn case(&self, args: &Args) -> Result<Case> {
+  pub fn case(&self) -> Result<Case> {
     let session = self.session.clone();
     let dir = self.dir.clone();
     let dir_report = self.dir_report.clone();
     let min_n = 1;
-    let max_n = args.data_size;
+    let max_n = self.data_size;
     let scale = Scale::Linear;
     let division = 100;
 
@@ -217,33 +191,97 @@ impl Experiment {
     })
   }
 
-  fn clean(&self) -> Result<()> {
+  fn work_dir(&self) -> Result<PathBuf> {
+    let path = self.dir.join(format!("slate_benchmark-{}", self.session));
+    if !path.exists() {
+      fs::create_dir_all(&path)?;
+    }
+    Ok(path)
+  }
+
+  fn clear(&self) -> Result<()> {
+    let work_dir = self.work_dir()?;
+    if work_dir.exists() {
+      for entry in fs::read_dir(&work_dir)? {
+        let e = entry?;
+        let path = e.path();
+        if e.file_type()?.is_dir() {
+          fs::remove_dir_all(e.path()).unwrap();
+          println!("directory removed: {}", path.to_string_lossy());
+        } else if e.file_type()?.is_file() {
+          fs::remove_file(e.path()).unwrap();
+          println!("file removed: {}", path.to_string_lossy());
+        } else {
+          println!("WARN: unrecognized file type: {}", path.to_string_lossy());
+        }
+      }
+    } else {
+      fs::create_dir_all(&work_dir)?;
+    }
+    Ok(())
+  }
+
+  fn clean_all_experiments(&self) -> Result<()> {
     let mut total = 0u64;
     let mut count = 0;
-    for entry in fs::read_dir(&self.dir)? {
-      let e = entry?;
-      if e.file_name().to_str().unwrap().starts_with("slate_benchmark-") {
-        if e.file_type()?.is_dir() {
-          let dir_path = e.path();
-          let size = file_size(&dir_path);
-          println!("Removing: {} ({} bytes)", dir_path.display(), size);
-          fs::remove_dir_all(&dir_path)?;
+    if self.dir.exists() {
+      for entry in fs::read_dir(&self.dir)? {
+        let e = entry?;
+        if e.file_name().to_str().unwrap().starts_with("slate_benchmark-") {
+          let path = e.path();
+          let size = file_size(&path);
+          println!("Removing: {} ({} bytes)", path.display(), size);
+          if e.file_type()?.is_dir() {
+            fs::remove_dir_all(&path)?;
+          } else if e.file_type()?.is_file() {
+            fs::remove_file(&path)?;
+          }
           total += size;
-        } else if e.file_type()?.is_file() {
+          count += 1;
         }
-        count += 1;
-      }
-      if e.file_type()?.is_dir() && e.file_name().to_str().unwrap().starts_with("slate_benchmark-") {
-        let dir_path = e.path();
-        let size = file_size(&dir_path);
-        println!("Removing: {} ({} bytes)", dir_path.display(), size);
-        fs::remove_dir_all(&dir_path)?;
-        total += size;
-        count += 1;
       }
     }
     eprintln!("{count} files are removed, total {total} bytes");
     Ok(())
+  }
+
+  fn run_testunit_append<C: AppendCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+    self.case()?.division(10).min_trials(2).max_trials(10).measure_the_append_time_relative_to_the_data_amount(cut)?;
+    Ok(self)
+  }
+
+  fn run_testunit_biased_get<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+    self.case()?.max_trials(500).measure_the_frequency_of_retrieval_against_positions_by_zipf(cut)?;
+    Ok(self)
+  }
+
+  fn run_testunit_uniformed_get<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+    self
+      .case()?
+      .division(100)
+      .scale(Scale::WorstCase)
+      .max_trials(500)
+      .cv_threshold(0.5)
+      .measure_the_retrieval_time_relative_to_the_position(cut, "get", 0)?;
+    Ok(self)
+  }
+
+  fn run_testunit_cache_level<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+    for level in 0..=3 {
+      self
+        .case()?
+        .division(64)
+        .scale(Scale::WorstCase)
+        .max_trials(1000)
+        .cv_threshold(0.5)
+        .measure_the_retrieval_time_relative_to_the_position(cut, &format!("cache{level}"), level)?;
+    }
+    Ok(self)
+  }
+
+  fn run_testunit_prove<C: ProveCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+    self.case()?.scale(Scale::WorstCase).measure_the_prove_time_relative_to_the_position(cut)?;
+    Ok(self)
   }
 }
 
@@ -277,7 +315,7 @@ impl Case {
   pub fn dir_work(&self, id: &str) -> PathBuf {
     let dir_work = self.dir.join(format!("slate_benchmark-{}", self.name(id)));
     if !dir_work.exists() {
-      create_dir_all(&dir_work).unwrap();
+      fs::create_dir_all(&dir_work).unwrap();
     }
     dir_work
   }
@@ -306,19 +344,12 @@ impl Case {
     gauge.into_iter().filter(|x| seen.insert(*x)).collect::<Vec<_>>()
   }
 
-  fn clean(&self, id: &str) -> Result<(usize, u64)> {
-    let (count, size) = file_count_and_size(self.dir_work(id));
-    println!("Clean: {}: removing {count} files ({size} bytes)", self.dir_work(id).to_string_lossy());
-    fs::remove_dir_all(self.dir_work(id))?;
-    Ok((count, size))
-  }
-
   /// データ量に対する追記時間を計測します。
-  pub fn measure_the_append_time_relative_to_the_data_amount<CUT>(self, id: &str) -> Result<Self>
+  pub fn measure_the_append_time_relative_to_the_data_amount<CUT>(self, cut: &mut CUT) -> Result<Self>
   where
     CUT: AppendCUT,
   {
-    println!("\n=== Append Benchmark ({id}) ===\n");
+    println!("\n=== Append Benchmark ({}) ===\n", cut.implementation());
     println!("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials");
     println!("--------\t--------\t----------\t-----\t\t------");
 
@@ -339,17 +370,16 @@ impl Case {
         break;
       }
 
+      cut.clear()?;
       let mut cum_time = Duration::ZERO;
-      let target = CUT::prepare(&self, id, 0, splitmix64)?;
       for n in gauge.iter() {
-        let (size, time) = CUT::append(&target, *n)?;
+        let (size, time) = cut.append(*n, splitmix64)?;
         if trials == 0 {
           space_complexity.add(n, size);
         }
         cum_time += time;
         time_complexity.add(n, cum_time.as_nanos() as f64 / 1000.0 / 1000.0);
       }
-      CUT::remove(&target)?;
       if trials % 100 == 99 {
         let s = time_complexity.calculate(&self.max_n).unwrap();
         println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials + 1);
@@ -357,11 +387,11 @@ impl Case {
     }
 
     // write report
-    let name = format!("{}-volume-{}", self.session, id);
+    let name = format!("{}-volume-{}", self.session, cut.implementation());
     let path = self.dir_report.join(format!("{name}.csv"));
     space_complexity.save_xy_to_csv(&path, "SIZE", "BYTES")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-    let name = format!("{}-append-{}", self.session, id);
+    let name = format!("{}-append-{}", self.session, cut.implementation());
     let path = self.dir_report.join(format!("{name}.csv"));
     time_complexity.save_xy_to_csv(&path, "SIZE", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
@@ -369,18 +399,20 @@ impl Case {
   }
 
   /// アクセス位置に対するデータ取得時間を計測します。
-  pub fn measure_the_retrieval_time_relative_to_the_position<CUT>(self, id: &str, cache_size: usize) -> Result<Self>
+  pub fn measure_the_retrieval_time_relative_to_the_position<CUT>(
+    self,
+    cut: &mut CUT,
+    action_id: &str,
+    cache_level: usize,
+  ) -> Result<Self>
   where
     CUT: GetCUT,
   {
-    println!("\n=== Get Benchmark ({id}) ===\n");
+    println!("\n=== Get Benchmark ({}) ===\n", cut.implementation());
 
     // データベースを作成
-    println!("Creating database with {} entries...", self.max_n);
-    let t0 = Instant::now();
-    let target = CUT::prepare(&self, id, self.max_n, splitmix64)?;
-    let t = t0.elapsed();
-    println!("created: {:.3} [msec]", t.as_nanos() as f64 / 1000.0 / 1000.0);
+    cut.prepare(self.max_n, splitmix64)?;
+    cut.set_cache_level(cache_level)?;
 
     println!("DataSize\tCV[%]\t\tTrials");
     println!("--------\t--------\t----------");
@@ -404,7 +436,7 @@ impl Case {
       }
 
       gauge.shuffle(&mut rng);
-      let results = CUT::gets(&target, &gauge, cache_size, splitmix64)?;
+      let results = cut.gets(&gauge, splitmix64)?;
       for (i, duration) in results {
         time_complexity.add(&i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
       }
@@ -412,32 +444,25 @@ impl Case {
         println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
       }
     }
-    CUT::remove(&target)?;
 
     // write report
-    let path = self.dir_report.join(format!("{}.csv", self.name(id)));
+    let id = format!("{action_id}-{}", cut.implementation());
+    let path = self.dir_report.join(format!("{}.csv", self.name(&id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
     Ok(self)
   }
 
   /// Zipf 分布に従うアクセス位置に対するデータ取得時間の頻度を計測します。
-  pub fn measure_the_frequency_of_retrieval_against_positions_by_zipf<CUT>(
-    self,
-    id: &str,
-    cache_size: usize,
-  ) -> Result<Self>
+  pub fn measure_the_frequency_of_retrieval_against_positions_by_zipf<CUT>(self, cut: &mut CUT) -> Result<Self>
   where
     CUT: GetCUT,
   {
-    println!("\n=== Zipf Get Benchmark ({id}) ===\n");
+    println!("\n=== Zipf Get Benchmark ({}) ===\n", cut.implementation());
 
     // データベースを作成
-    println!("Creating database with {} entries...", self.max_n);
-    let t0 = Instant::now();
-    let target = CUT::prepare(&self, id, self.max_n, splitmix64)?;
-    let t = t0.elapsed();
-    println!("created: {:.3} [msec]", t.as_nanos() as f64 / 1000.0 / 1000.0);
+    cut.prepare(self.max_n, splitmix64)?;
+    cut.set_cache_level(0)?;
 
     println!("Shape\t\tDataSize\tMean\t\tStdDev\t\tMax\t\tTrials");
     println!("--------\t--------\t--------\t--------\t--------\t----------");
@@ -455,7 +480,7 @@ impl Case {
         }
       }
 
-      let results = CUT::gets(&target, &batch, cache_size, splitmix64)?;
+      let results = cut.gets(&batch, splitmix64)?;
       time_frequency
         .append(&x_label, results.iter().map(|(_, d)| d.as_nanos() as f64 / 1000.0 / 1000.0).collect::<Vec<_>>());
       position_frequency.append(&x_label, batch.clone());
@@ -465,49 +490,56 @@ impl Case {
         x_label, self.max_n, stat.mean, stat.std_dev, stat.max, self.max_trials
       );
     }
-    CUT::remove(&target)?;
 
     // write report
-    let path = self.dir_report.join(format!("{}_x.csv", self.name(id)));
+    let id = format!("biased-get-{}", cut.implementation());
+    let path = self.dir_report.join(format!("{}_x.csv", self.name(&id)));
     position_frequency.save_xy_to_csv(&path, "ZIPF", "POSITION")?;
-    let path = self.dir_report.join(format!("{}_y.csv", self.name(id)));
+    let path = self.dir_report.join(format!("{}_y.csv", self.name(&id)));
     time_frequency.save_xy_to_csv(&path, "ZIPF", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
     Ok(self)
   }
 
   // データ差異の位置に対する差分検出時間を計測します。
-  fn measure_the_prove_time_relative_to_the_position<CUT>(self, id: &str) -> Result<Self>
+  fn measure_the_prove_time_relative_to_the_position<CUT>(self, cut: &mut CUT) -> Result<Self>
   where
     CUT: ProveCUT,
   {
-    println!("\n=== Prove Benchmark ({id}) ===\n");
+    println!("\n=== Prove Benchmark ({}) ===\n", cut.implementation());
     let mut gauge = self.gauge();
 
-    print!("Creating {} files with one difference each: ", gauge.len());
-    let (errs, targets): (Vec<Error>, Vec<_>) = gauge
-      .par_iter()
-      .cloned()
-      .map(Some)
-      .chain(vec![None])
-      .map(|i| {
-        let target = CUT::prepare(&self, id, self.max_n, |k| {
-          let value = splitmix64(k);
-          if i.map(|i| i == k).unwrap_or(false) { splitmix64(value) } else { value }
-        })?;
-        print!("*");
-        Ok((i, target))
+    println!("Creating {} files with one difference each..", gauge.len());
+    cut.prepare(self.max_n, splitmix64)?;
+    let (mut errs, targets): (Vec<Error>, Vec<_>) = gauge
+      .iter()
+      .copied()
+      .map(|i| (i, cut.alternate()))
+      .par_bridge()
+      .map(|(i, alt)| match alt {
+        Ok(mut alt) => {
+          alt.prepare(self.max_n, |k| {
+            let value = splitmix64(k);
+            if i == k { splitmix64(value) } else { value }
+          })?;
+          Ok((i, alt))
+        }
+        Err(err) => Err(err),
       })
       .partition_map(|target| match target {
         Ok(target) => Either::Right(target),
         Err(err) => Either::Left(err),
       });
     if !errs.is_empty() {
-      println!(": preparation failure");
-      return self.clean(id).map(|_| self);
+      println!("preparation failure");
+      drop(targets);
+      for err in errs.iter() {
+        eprintln!("ERROR: {err:?}");
+      }
+      return Err(errs.pop().unwrap());
     }
-    let targets = targets.into_iter().collect::<HashMap<_, _>>();
-    println!(": preparation completed");
+    let cuts = targets.into_iter().collect::<HashMap<_, _>>();
+    println!("preparation completed");
 
     println!("DataSize\tCV[%]\t\tTrials");
     println!("--------\t--------\t----------");
@@ -531,9 +563,8 @@ impl Case {
 
       gauge.shuffle(&mut rng);
       for i in gauge.iter().cloned() {
-        let target1 = targets.get(&None).unwrap();
-        let target2 = targets.get(&Some(i)).unwrap();
-        let (result, elapse) = CUT::prove(target1, target2)?;
+        let other = cuts.get(&i).unwrap();
+        let (result, elapse) = cut.prove(other)?;
         assert_eq!(Some(i), result);
         time_complexity.add(&(self.max_n - i + 1), elapse.as_nanos() as f64 / 1000.0 / 1000.0);
       }
@@ -543,11 +574,13 @@ impl Case {
     }
 
     // write report
-    let path = self.dir_report.join(format!("{}.csv", self.name(id)));
+    let id = format!("prove-{}", cut.implementation());
+    let path = self.dir_report.join(format!("{}.csv", self.name(&id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "DETECT TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
 
-    return self.clean(id).map(|_| self);
+    drop(cuts);
+    Ok(self)
   }
 }
 
@@ -555,32 +588,30 @@ fn filter_cv_sufficient(gauge: &[u64], ss: &stat::XYReport<u64, f64>, cv: f64) -
   gauge.iter().filter(|i| !ss.is_cv_sufficient(**i, cv)).cloned().collect::<Vec<_>>()
 }
 
-/// Component under Test.
+// Component under Test.
+
 pub trait CUT {
-  type T: std::marker::Send + Debug;
-
-  /// n 個のデータを投入したデータベースを作成する。
-  fn prepare<T: Fn(Index) -> u64>(case: &Case, id: &str, n: Index, values: T) -> Result<Self::T>;
-
-  /// 指定されたデータベースを削除する。
-  fn remove(target: &Self::T) -> Result<()>;
-}
-
-pub trait AppendCUT: CUT {
-  fn append(target: &Self::T, n: Index) -> Result<(u64, Duration)>;
+  fn implementation(&self) -> String;
 }
 
 pub trait GetCUT: CUT {
-  fn gets<V: Fn(u64) -> u64>(
-    target: &Self::T,
-    is: &[Index],
-    cache_size: usize,
-    values: V,
-  ) -> Result<Vec<(u64, Duration)>>;
+  fn set_cache_level(&mut self, cache_size: usize) -> Result<()>;
+  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()>;
+  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>>;
 }
 
-pub trait ProveCUT: CUT + Sync {
-  fn prove(target1: &Self::T, target2: &Self::T) -> Result<(Option<u64>, Duration)>;
+pub trait AppendCUT: CUT {
+  /// ## Returns
+  /// - (storage size, duration)
+  fn append<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<(u64, Duration)>;
+  fn clear(&mut self) -> Result<()>;
+}
+
+pub trait ProveCUT: GetCUT + Sync + Send {
+  fn prove(&self, other: &Self) -> Result<(Option<u64>, Duration)>;
+  fn alternate(&self) -> Result<Self>
+  where
+    Self: std::marker::Sized;
 }
 
 pub trait IntoFloat: Copy {
