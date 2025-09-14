@@ -5,10 +5,10 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = "{{ 128 * 1024 * 1024 }}"
-TIMEOUT_SECONDS = "{{ 60 * 60 }}"
-# DATA_SIZE = "{{ 256 }}"
-# TIMEOUT_SECONDS = "{{ 5 * 60 }}"
+# DATA_SIZE = "{{ 128 * 1024 * 1024 }}"
+# TIMEOUT_SECONDS = "{{ 60 * 60 }}"
+DATA_SIZE = "{{ 65536 }}"
+TIMEOUT_SECONDS = "{{ 5 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 WORK_DIR = "/tmp"
@@ -56,34 +56,26 @@ run = ["./iavl/iavl --clean && go mod tidy && go clean"]
 [tasks."fmt:go"]
 description = "Clean Go build artifacts and results"
 dir = "golang"
-run = ["go mod tidy && go fmt mt_bench/common mt_bench/iavl mt_bench/doltdb"]
+run = ["go mod tidy && go fmt slate_benchmark/common slate_benchmark/iavl slate_benchmark/doltdb"]
 
 [tasks."setup:go"]
 description = "Setup Go project dependencies"
 dir = "golang"
 run = ["go mod download"]
 
-[tasks."build:iavl"]
+[tasks."build:go"]
 depends = ["setup:go"]
-sources = ["golang/iavl/**/*.go", "golang/common/**/*.go", "golang/go.mod"]
-outputs = ["golang/iavl/iavl"]
+sources = ["golang/**/*.go", "golang/go.mod"]
+outputs = ["golang/bench"]
 dir = "golang"
-run = ["go build -trimpath -o iavl/iavl iavl/main.go"]
-
-[tasks."build:doltdb"]
-depends = ["setup:go"]
-sources = ["golang/doltdb/main.go", "golang/common/**/*.go", "golang/go.mod"]
-outputs = ["golang/doltdb/doltdb"]
-dir = "golang"
-run = ["go build -trimpath -o doltdb/doltdb doltdb/main.go"]
+run = ["go build -trimpath -o bench main.go"]
 
 [tasks."bench:go"]
 description = "Run Go benchmarks"
 env.IAVL_DATA_SIZE = "{% if env.DATA_SIZE | int > 1024 * 1024 %}{{ 1024 * 1024 }}{% else %}{{ env.DATA_SIZE | default(value='1048576') }}{% endif %}"
-depends = ["build:iavl", "build:doltdb"]
+depends = ["build:go"]
 run = [
-  "golang/iavl/iavl     $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --timeout ${TIMEOUT_SECONDS}s --output \"$RESULTS_DIR\"",
-  "golang/doltdb/doltdb $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --timeout ${TIMEOUT_SECONDS}s --output \"$RESULTS_DIR\"",
+  "golang/bench $IAVL_DATA_SIZE --dir \"$WORK_DIR\" --timeout ${TIMEOUT_SECONDS}s --output \"$RESULTS_DIR\"",
 ]
 
 # --- Rust Projects ---
@@ -127,14 +119,14 @@ run = ["python bench_info.py \"$WORK_DIR\""]
 run = [
   '''
   mkdir -p $RESULTS_DIR
-  sudo apt install llvm-dev libclang-dev clang
+  sudo apt install -y llvm-dev libclang-dev clang
   ''',
 
   '''
   echo '🎸 Installing LaTeX...'
   sudo apt-get update
-  sudo apt -y install texlive-xetex texlive-lang-japanese texlive-fonts-extra dvipng
-  sudo apt -y install smartmontools fio
+  sudo apt install -y texlive-xetex texlive-lang-japanese texlive-fonts-extra dvipng
+  sudo apt install -y smartmontools fio
   ''',
 
   '''

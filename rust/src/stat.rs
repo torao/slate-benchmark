@@ -1,4 +1,5 @@
 use crate::IntoFloat;
+use chrono::{DateTime, Local};
 use core::f64;
 use slate::Result;
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct Stat {
@@ -175,5 +177,183 @@ impl<X: Display + Clone + std::hash::Hash + Eq + PartialEq + Ord, Y: IntoFloat +
 
   pub fn calculate(&self, x: &X) -> Option<Stat> {
     self.data_set.get(x).map(|ys| Stat::from_vec(self.unit, ys))
+  }
+}
+
+pub struct ExpirationTimer {
+  start: Instant,
+  dead_line: Duration,
+  last_noticed: Instant,
+  notice_interval: Duration,
+  max_trials: usize,
+  current: usize,
+  interval: usize,
+}
+
+impl ExpirationTimer {
+  pub fn new(dead_line: Duration, minutes: usize, max_trials: usize, div: usize) -> Self {
+    let start = Instant::now();
+    let last_noticed = start;
+    let notice_interval = Duration::from_secs(minutes as u64 * 60);
+    let current = 0;
+    let interval = max_trials / div;
+    Self { start, dead_line, last_noticed, notice_interval, max_trials, current, interval }
+  }
+
+  pub fn expired(&self) -> bool {
+    self.start.elapsed() >= self.dead_line
+  }
+
+  pub fn elapsed(&self) -> Duration {
+    self.start.elapsed()
+  }
+
+  pub fn estimated_end_time(&self) -> Instant {
+    let avr_per_trial = self.elapsed() / self.current as u32;
+    let total_estimate = avr_per_trial * self.max_trials as u32;
+    self.start + total_estimate
+  }
+
+  pub fn eta(&self) -> String {
+    let system_time = SystemTime::now() + (self.estimated_end_time() - Instant::now());
+    let dt: DateTime<Local> = system_time.into();
+    let now: DateTime<Local> = SystemTime::now().into();
+    let diff = dt - now;
+    let fmt = if now.date_naive() != dt.date_naive() {
+      "%m-%d %H:%M"
+    } else if diff.num_hours() >= 1 {
+      "%H:%M"
+    } else {
+      "%H:%M:%S"
+    };
+    let eta = dt.format(fmt).to_string();
+
+    let secs = diff.num_seconds();
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    let remaining = if h > 0 {
+      format!("{h}h{m:02}m")
+    } else if m > 0 {
+      format!("{m}m{s:02}s")
+    } else {
+      format!("{s}s")
+    };
+    format!("{eta} ({remaining})")
+  }
+
+  pub fn carried_out(&mut self, amount: usize) -> bool {
+    let current = self.current;
+    self.current += amount;
+
+    if (self.last_noticed.elapsed() >= self.notice_interval)
+      || self.current >= self.max_trials
+      || (current != 0 && (self.current / self.interval != current / self.interval))
+    {
+      self.last_noticed = Instant::now();
+      true
+    } else {
+      false
+    }
+  }
+
+  fn heading(columns: &[Column]) {
+    println!("{}", columns.iter().map(|c| c.heading()).collect::<Vec<_>>().join(" "));
+    println!("{}", columns.iter().map(|c| c.line()).collect::<Vec<_>>().join(" "));
+  }
+
+  fn summary(columns: &[Column]) {
+    println!("{}", columns.iter().map(|c| c.fmt()).collect::<Vec<_>>().join(" "));
+  }
+
+  pub fn heading_ms() {
+    Self::heading(&[
+      Column::DataSize(0),
+      Column::MeanMS(0.0),
+      Column::StdDevMS(0.0),
+      Column::CV(0.0),
+      Column::Trials(0),
+      Column::Eta(String::from("")),
+    ]);
+  }
+  pub fn summary_ms(&self, data_size: u64, mean: f64, std_dev: f64) {
+    Self::summary(&[
+      Column::DataSize(data_size),
+      Column::MeanMS(mean),
+      Column::StdDevMS(std_dev),
+      Column::CV(std_dev / mean * 100.0),
+      Column::Trials(self.current),
+      Column::Eta(self.eta()),
+    ]);
+  }
+  pub fn heading_max_cv() {
+    Self::heading(&[Column::DataSize(0), Column::CV(0.0), Column::Trials(0), Column::Eta(String::from(""))]);
+  }
+  pub fn summary_max_cv(&self, data_size: u64, max_cv: f64) {
+    Self::summary(&[
+      Column::DataSize(data_size),
+      Column::CV(max_cv * 100.0),
+      Column::Trials(self.current),
+      Column::Eta(self.eta()),
+    ]);
+  }
+}
+
+enum Column {
+  DataSize(u64),
+  MeanMS(f64),
+  StdDevMS(f64),
+  CV(f64),
+  Trials(usize),
+  Eta(String),
+}
+
+impl Column {
+  pub fn label(&self) -> &'static str {
+    match self {
+      Self::DataSize(_) => "DataSize",
+      Self::MeanMS(_) => "Mean[ms]",
+      Self::StdDevMS(_) => "StdDev[ms]",
+      Self::CV(_) => "CV[%]",
+      Self::Trials(_) => "Trials",
+      Self::Eta(_) => "ETA",
+    }
+  }
+  pub fn len(&self) -> usize {
+    self.label().len().max(match self {
+      Self::DataSize(_) => 10,
+      Self::MeanMS(_) => 9,
+      Self::StdDevMS(_) => 9,
+      Self::CV(_) => 6,
+      Self::Trials(_) => 9,
+      Self::Eta(_) => 18,
+    })
+  }
+
+  pub fn heading(&self) -> String {
+    let h = match self {
+      Self::DataSize(_) => "DataSize",
+      Self::MeanMS(_) => "Mean[ms]",
+      Self::StdDevMS(_) => "StdDev[ms]",
+      Self::CV(_) => "CV[%]",
+      Self::Trials(_) => "Trials",
+      Self::Eta(_) => "ETA",
+    };
+    format!("{h:^s$}", s = self.len())
+  }
+
+  pub fn line(&self) -> String {
+    "-".repeat(self.len())
+  }
+
+  pub fn fmt(&self) -> String {
+    match self {
+      Self::DataSize(ds) => format!("{ds:>w$}", w = self.len()),
+      Self::MeanMS(m) => format!("{m:>w$.3}", w = self.len()),
+      Self::StdDevMS(sd) => format!("{sd:>w$.3}", w = self.len()),
+      Self::CV(cv) => format!("{cv:>w$.1}", w = self.len()),
+      Self::Trials(tr) => format!("{tr:>w$}", w = self.len()),
+      Self::Eta(eta) => format!("{eta:<w$}", w = self.len()),
+    }
   }
 }

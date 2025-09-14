@@ -128,7 +128,7 @@ def plot_histogram_multiple_files(file_args, args):
         )
 
     # 図を作成
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(10, 6))
 
     # 色のリスト
     colors = [
@@ -223,7 +223,7 @@ def plot_histogram_multiple_files(file_args, args):
                     width=bar_width,
                     alpha=0.8,
                     color=color,
-                    label=f"{file_legends[i]} ($\\mu$={stats['mean']:.4f}, $\\sigma$={stats['std']:.4f}, $n$={stats['count']})",
+                    label=f"{file_legends[i]} ($\\mu$={stats['mean']:.4f}, $\\sigma$={stats['std']:.4f}, $N$={stats['count']})",
                     edgecolor='black' if args.edgecolor else None,
                     linewidth=0.5 if args.edgecolor else 0
                 )
@@ -319,7 +319,7 @@ def plot_histogram_multiple_files(file_args, args):
     if args.ymin is not None or args.ymax is not None:
         plt.ylim(args.ymin, args.ymax)
 
-    plt.legend(fontsize=10)
+    plt.legend()
     plt.grid(True, alpha=0.3)
 
     # 保存

@@ -2,7 +2,7 @@
 set -eu
 
 dir=results
-size=1M
+size=64k
 
 latest_timestamp() {
   find $dir -maxdepth 1 -name "[0-9]*-$1-*.csv" -type f | sort | tail -1 | xargs basename 2>/dev/null | cut -c1-14
@@ -61,7 +61,7 @@ if [ ! -z "$ts1" ]; then
     --title "Get Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance from latest data" \
     --ylabel "Time taken to acquire data [msec]" \
-    --ymin 0 --ymax 0.017 \
+    --ymin 0 \
     --xscale log \
     --xreverse \
     --no-errorbars --no-scatter
@@ -88,19 +88,18 @@ fi
 
 # Prove
 ts1=$(latest_timestamp "prove-slate")
-ts2=$(latest_timestamp "query-iavl")
 if [ ! -z "$ts1" ]; then
   python3 scripts/scatter-plot-xy.py \
     "$dir/$ts1-prove-slate-file.csv=Slate (file)" \
     "$dir/$ts1-prove-slate-rocksdb.csv=Slate (rocksdb)" \
-    -o "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" \
+    -o "$dir/$ts1-prove.png" \
     --title "Proven Performance \$(T_{\\rm $size})\$" \
     --xlabel "Distance of differences from latest data" \
     --ylabel "Time taken to prove data [msec]" \
     --xscale log \
     --ymin 0 --ymax 0.6 \
     --no-latex --no-errorbars
-  cp "$dir/$([[ "$ts1" > "$ts2" ]] && echo "$ts1" || echo "$ts2")-prove.png" "bench-prove.png"
+  cp "$dir/$ts1-prove.png" "bench-prove.png"
 fi
 
 # Performance distribution of GET requests under skewed access patterns
@@ -112,7 +111,7 @@ if [ ! -z "$ts1" ]; then
     --title 'Distribution of Access Positions following Zipf Bias $p(i)\propto 1/k^s$' \
     --xlabel 'Position $i$' \
     --ylabel 'Frequency $f$' \
-    --bin-width 8 \
+    --bin-width 1024 \
     --chart-type line
   cp "$dir/$ts1-biased-get-slate-file_x.png" "bench-biased-get-x.png"
   python3 scripts/histogram-plot.py \
@@ -121,8 +120,8 @@ if [ ! -z "$ts1" ]; then
     --title "Distribution of Get Performance for Access with Zipf Bias (\$T_{\\rm $size}\$)" \
     --xlabel "Time [msec]" \
     --ylabel 'Frequency $f$' \
-    --xmax 0.02 \
-    --bin-width 0.001 \
+    --xmin 0.0 --xmax 0.05 \
+    --bin-width 0.002 \
     --chart-type line
   cp "$dir/$ts1-biased-get-slate-file_y.png" "bench-biased-get-y.png"
 fi

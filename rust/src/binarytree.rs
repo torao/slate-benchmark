@@ -42,17 +42,13 @@ impl CUT for FileBinaryTreeCUT {
 
 impl GetCUT for FileBinaryTreeCUT {
   #[inline(never)]
-  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+  fn get<V: Fn(u64) -> u64>(&mut self, i: Index, values: V) -> Result<Duration> {
     let mut bht = BinaryHashTree::from_file(&self.path, 1 << self.cache_level)?;
-    let mut results = Vec::with_capacity(is.len());
-    for i in is.iter().cloned() {
-      let start = Instant::now();
-      let value = bht.get(i)?;
-      let elapsed = start.elapsed();
-      assert_eq!(Some(values(i)), value.map(|b| u64::from_le_bytes(b.try_into().unwrap())), " at {i}");
-      results.push((i, elapsed))
-    }
-    Ok(results)
+    let start = Instant::now();
+    let value = bht.get(i)?;
+    let elapsed = start.elapsed();
+    assert_eq!(Some(values(i)), value.map(|b| u64::from_le_bytes(b.try_into().unwrap())), " at {i}");
+    Ok(elapsed)
   }
 
   fn set_cache_level(&mut self, cache_size: usize) -> Result<()> {

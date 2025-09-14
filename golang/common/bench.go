@@ -27,6 +27,13 @@ const (
 	DefaultResultDir = "." // デフォルトの結果出力ディレクトリ
 )
 
+type CUT interface {
+	Open()
+	Close()
+	MeasureAppend(uint64) (time.Duration, uint64)
+	MeasureGets([]uint64) map[uint64]time.Duration
+}
+
 // コマンドライン引数
 type Config struct {
 	DataSize  uint64
@@ -40,40 +47,46 @@ type Config struct {
 func BenchmarkAppend(
 	config *Config,
 	append_id, volume_id string,
-	measureAppend func(string, uint64) (time.Duration, uint64),
+	cut CUT,
 ) {
-	fmt.Printf("\n=== Append Benchmark (%s) ===\n", append_id)
-	fmt.Println("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials")
-	fmt.Println("--------\t--------\t----------\t-----\t\t------")
+	fmt.Println(time.Now().Format("2006-01-02 15:04:05 MST"))
+	fmt.Printf("=== Append Benchmark (%s) ===\n", append_id)
+
+	timer := NewExpirationTimer(config.Timeout, 10, MaxTrials, 10)
+	timer.HeadingMS()
 
 	ns := Linspace(1, config.DataSize, AppendDivision)
 	timeComplexity := NewStats()
 	spaceComplexity := NewStats()
-	start := time.Now()
 	for i := 0; i < MaxTrials; i++ {
-		if i > MinTrials && len(FilterCvSufficient(ns, timeComplexity)) == 0 {
-			break
-		}
-		if time.Since(start) >= config.Timeout {
-			fmt.Println("** TIMED OUT **")
-			break
-		}
 
 		config.RemoveDatabase(append_id)
+		cut.Close()
+		cut.Open()
 		var cumTime time.Duration
 		for _, n := range ns {
-			elapse, space := measureAppend(config.DatabasePath(append_id), n)
+			elapse, space := cut.MeasureAppend(n)
 			cumTime += elapse
 			timeComplexity.Add(n, float64(cumTime.Nanoseconds())/1000.0/1000.0)
 			if i == 0 {
 				spaceComplexity.Add(n, float64(space))
 			}
 		}
-		config.RemoveDatabase(append_id)
-		if i%100 == 99 {
+
+		if i+1 > MinTrials && len(FilterCvSufficient(ns, timeComplexity)) == 0 {
 			mean, stddev, _ := timeComplexity.Calculate(config.DataSize)
-			fmt.Printf("%d\t\t%.1fms\t%.2fms\t\t%.3f\t\t%d\n",
-				config.DataSize, mean, stddev, stddev/mean, i+1)
+			timer.SummaryMS(config.DataSize, mean, stddev)
+			break
+		}
+		if timer.Expired() {
+			mean, stddev, _ := timeComplexity.Calculate(config.DataSize)
+			timer.SummaryMS(config.DataSize, mean, stddev)
+			fmt.Println("** TIMED OUT **")
+			break
+		}
+		if timer.CarriedOut(1) {
+			mean, stddev, _ := timeComplexity.Calculate(config.DataSize)
+			timer.SummaryMS(config.DataSize, mean, stddev)
 		}
 	}
 
@@ -85,21 +98,19 @@ func BenchmarkAppend(
 func BenchmarkGet(
 	config *Config,
 	query_id string,
-	measureAppend func(string, uint64) (time.Duration, uint64),
-	measureQuery func(string, []uint64) map[uint64]time.Duration,
+	cut CUT,
 ) {
-	fmt.Printf("\n=== Get Benchmark (%s) ===\n", query_id)
+	fmt.Println(time.Now().Format("2006-01-02 15:04:05 MST"))
+	fmt.Printf("=== Get Benchmark (%s) ===\n", query_id)
 
 	// データベースを作成
-	fmt.Printf("Creating database with %d entries...\n", config.DataSize)
+	fmt.Printf("Preparing database with %d entries: ", config.DataSize)
 	config.RemoveDatabase(query_id)
 	t0 := time.Now()
-	measureAppend(config.DatabasePath(query_id), config.DataSize)
+	cut.Open()
+	cut.MeasureAppend(config.DataSize)
 	tm := time.Since(t0)
-	fmt.Printf("created: %.3f [msec]\n", float64(tm.Nanoseconds())/1000.0/1000.0)
-
-	fmt.Println("DataSize\tCV[%]\t\tTrials")
-	fmt.Println("--------\t--------\t----------")
+	fmt.Printf("done: %.3f [msec]\n", float64(tm.Nanoseconds())/1000.0/1000.0)
 
 	distances := Logspace(1, config.DataSize, QueryDivision)
 	is := make([]uint64, len(distances))
@@ -107,33 +118,36 @@ func BenchmarkGet(
 		is[i] = config.DataSize - distance + 1
 	}
 
+	timer := NewExpirationTimer(config.Timeout, 10, MaxTrials, 10)
+	timer.HeadingMaxCV()
+
 	rand.Seed(time.Now().UnixNano())
 	timeComplexity := NewStats()
-	start := time.Now()
 	for i := 0; i < MaxTrials; i++ {
-		if i > MinTrials {
-			is = FilterCvSufficient(is, timeComplexity)
-			if len(is) == 0 {
-				break
-			}
-		}
-		if time.Since(start) >= config.Timeout {
-			fmt.Println("** TIMED OUT **")
-			break
-		}
-
 		rand.Shuffle(len(is), func(i, j int) {
 			is[i], is[j] = is[j], is[i]
 		})
-		result := measureQuery(config.DatabasePath(query_id), is)
+		result := cut.MeasureGets(is)
 		for j, duration := range result {
 			timeComplexity.Add(j, float64(duration.Nanoseconds())/1000.0/1000.0)
 		}
-		if (i+1)%100 == 0 {
-			fmt.Printf("%d\t\t%.3f\t\t%d/%d\n", config.DataSize, timeComplexity.MaxRelative(), i+1, MaxTrials)
+
+		if i+1 >= MinTrials {
+			is = FilterCvSufficient(is, timeComplexity)
+			if len(is) == 0 {
+				timer.SummaryMaxCV(config.DataSize, timeComplexity.MaxRelative())
+				break
+			}
+		}
+		if timer.Expired() {
+			timer.SummaryMaxCV(config.DataSize, timeComplexity.MaxRelative())
+			fmt.Println("** TIMED OUT **")
+			break
+		}
+		if timer.CarriedOut(1) {
+			timer.SummaryMaxCV(config.DataSize, timeComplexity.MaxRelative())
 		}
 	}
-	config.RemoveDatabase(query_id)
 
 	timeComplexity.Save(config.ResultFile(query_id), "SIZE", "TIME")
 }

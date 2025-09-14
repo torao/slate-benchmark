@@ -87,31 +87,23 @@ impl<S: Storage<Entry>, F: StorageFactory<S>> GetCUT for SlateCUT<S, F> {
     let slate = self.slate.as_mut().unwrap();
     if slate.n() != n {
       assert!(slate.n() < n, "slate {} is larger than {n}", slate.n());
-      println!("Preparing database with {n} entries...");
-      let start = Instant::now();
       while slate.n() < n {
         let n = slate.n() + 1;
         slate.append(&values(n).to_le_bytes())?;
       }
-      let elapse = start.elapsed();
-      println!("created: {:.3} [msec]", elapse.as_nanos() as f64 / 1000.0 / 1000.0);
     }
     Ok(())
   }
 
   #[inline(never)]
-  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+  fn get<V: Fn(u64) -> u64>(&mut self, i: Index, values: V) -> Result<Duration> {
     let slate = self.slate.as_mut().unwrap();
-    let mut results = Vec::with_capacity(is.len());
-    for i in is.iter().cloned() {
-      assert!(slate.n() >= i, "n={} less than i={}", slate.n(), i);
-      let start = Instant::now();
-      let value = slate.snapshot().query()?.get(i)?;
-      let elapsed = start.elapsed();
-      assert_eq!(Some(values(i)), value.map(|b| u64::from_le_bytes(b.try_into().unwrap())));
-      results.push((i, elapsed))
-    }
-    Ok(results)
+    assert!(slate.n() >= i, "n={} less than i={}", slate.n(), i);
+    let start = Instant::now();
+    let value = slate.snapshot().query()?.get(i)?;
+    let elapsed = start.elapsed();
+    assert_eq!(Some(values(i)), value.map(|b| u64::from_le_bytes(b.try_into().unwrap())));
+    Ok(elapsed)
   }
 }
 

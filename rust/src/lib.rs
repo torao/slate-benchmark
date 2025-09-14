@@ -107,46 +107,6 @@ impl ZipfDistribution {
   }
 }
 
-pub struct ParetoDistribution {
-  seed: u64,
-  alpha: f64, // shape parameter > 0
-}
-
-impl ParetoDistribution {
-  pub fn new(seed: u64, alpha: f64) -> Self {
-    assert!(alpha > 0.0);
-    Self { seed, alpha }
-  }
-
-  /// 1..=n 範囲で切り詰められた (上限 n) パレート分布に従う整数を生成します。
-  pub fn next_u64(&mut self, n: u64) -> u64 {
-    assert!(n >= 1);
-
-    // (0, 1] 範囲の一様乱数を生成
-    self.seed = splitmix64(self.seed);
-    let r = self.seed; // in [0, u64::MAX]
-    let u = (r as f64 + 1.0) / (u128::from(u64::MAX) as f64 + 1.0); // in (0,1]
-
-    let denom = 1.0 - (n as f64).powf(-self.alpha);
-    let x_continuous = if n == 1 {
-      1.0
-    } else {
-      let inner = 1.0 - u * denom;
-      let inner = inner.max((n as f64).powf(-self.alpha)).min(1.0); // inner should be in (n^{-alpha}, 1.0]; guard numeric issues
-      inner.powf(-1.0 / self.alpha)
-    };
-
-    let mut k = x_continuous.floor() as i128;
-    if k < 1 {
-      k = 1;
-    }
-    if k as u64 > n {
-      k = n as i128;
-    }
-    k as u64
-  }
-}
-
 pub fn unique_file(dir: &Path, prefix: &str, suffix: &str) -> PathBuf {
   for i in 0..=usize::MAX {
     let name = if i == 0 { format!("{prefix}{suffix}") } else { format!("{prefix}_{i}{suffix}") };

@@ -58,35 +58,30 @@ impl GetCUT for SeqFileCUT {
   }
 
   #[inline(never)]
-  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>> {
+  fn get<V: Fn(u64) -> u64>(&mut self, i: Index, values: V) -> Result<Duration> {
     let file = self.file.as_mut().unwrap();
     let file_size = file.seek(SeekFrom::End(0))?;
     assert!(file_size % 8 == 0);
     let mut buffer = vec![0u8; 8 * (1 << self.cache_level)];
-    let mut results = Vec::with_capacity(is.len());
-    for i in is.iter().copied() {
-      let mut position = file_size;
-      let mut i_current = file_size / 8;
-      let start = Instant::now();
-      'hoge: while position > 0 {
-        let read_size = buffer.len().min(position as usize);
-        position -= read_size as u64;
-        file.seek(SeekFrom::Start(position))?;
-        file.read_exact(&mut buffer[..read_size])?;
-        for chunk in buffer[..read_size].rchunks_exact(8) {
-          let value = u64::from_le_bytes(chunk.try_into().unwrap());
-          if i_current == i {
-            let elapse = start.elapsed();
-            assert_eq!(values(i), value);
-            results.push((i, elapse));
-            break 'hoge;
-          }
-          i_current -= 1;
+    let mut position = file_size;
+    let mut i_current = file_size / 8;
+    let start = Instant::now();
+    while position > 0 {
+      let read_size = buffer.len().min(position as usize);
+      position -= read_size as u64;
+      file.seek(SeekFrom::Start(position))?;
+      file.read_exact(&mut buffer[..read_size])?;
+      for chunk in buffer[..read_size].rchunks_exact(8) {
+        let value = u64::from_le_bytes(chunk.try_into().unwrap());
+        if i_current == i {
+          let elapse = start.elapsed();
+          assert_eq!(values(i), value);
+          return Ok(elapse);
         }
+        i_current -= 1;
       }
     }
-    assert_eq!(is.len(), results.len());
-    Ok(results)
+    panic!()
   }
 }
 

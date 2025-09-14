@@ -1,4 +1,4 @@
-module mt_bench
+module slate_benchmark
 
 go 1.25.0
 

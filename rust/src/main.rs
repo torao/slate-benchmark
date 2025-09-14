@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use slate_benchmark::{ZipfDistribution, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{Write, stdout};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use crate::binarytree::FileBinaryTreeCUT;
 use crate::seqfile::SeqFileCUT;
 use crate::slate::{FileFactory, MemKVSFactory, RocksDBFactory, SlateCUT, StorageFactory};
-use crate::stat::{Unit, XYReport};
+use crate::stat::{ExpirationTimer, Unit, XYReport};
 
 mod binarytree;
 mod seqfile;
@@ -349,27 +350,16 @@ impl Case {
   where
     CUT: AppendCUT,
   {
-    println!("\n=== Append Benchmark ({}) ===\n", cut.implementation());
-    println!("DataSize\tMean[ms]\tStdDev[ms]\tCV[%]\t\tTrials");
-    println!("--------\t--------\t----------\t-----\t\t------");
+    println!("\n{}", Local::now().format("%Y-%m-%d %H:%M:%S %Z"));
+    println!("=== Append Benchmark ({}) ===\n", cut.implementation());
+
+    let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
+    ExpirationTimer::heading_ms();
 
     let mut space_complexity = stat::XYReport::new(stat::Unit::Bytes);
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let gauge = self.gauge();
-    let start = Instant::now();
     for trials in 0..self.max_trials {
-      if trials > self.min_trials && filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold).is_empty() {
-        let s = time_complexity.calculate(&self.max_n).unwrap();
-        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
-        break;
-      }
-      if start.elapsed() > self.max_duration {
-        println!("** TIMED OUT **");
-        let s = time_complexity.calculate(&self.max_n).unwrap();
-        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials);
-        break;
-      }
-
       cut.clear()?;
       let mut cum_time = Duration::ZERO;
       for n in gauge.iter() {
@@ -380,9 +370,21 @@ impl Case {
         cum_time += time;
         time_complexity.add(n, cum_time.as_nanos() as f64 / 1000.0 / 1000.0);
       }
-      if trials % 100 == 99 {
+
+      if trials + 1 >= self.min_trials && filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold).is_empty() {
         let s = time_complexity.calculate(&self.max_n).unwrap();
-        println!("{}\t\t{:.1}ms\t{:.2}ms\t\t{:.3}\t\t{}\n", self.max_n, s.mean, s.std_dev, s.cv(), trials + 1);
+        timer.summary_ms(self.max_n, s.mean, s.std_dev);
+        break;
+      }
+      if timer.expired() {
+        let s = time_complexity.calculate(&self.max_n).unwrap();
+        timer.summary_ms(self.max_n, s.mean, s.std_dev);
+        println!("** TIMED OUT **");
+        break;
+      }
+      if timer.carried_out(1) {
+        let s = time_complexity.calculate(&self.max_n).unwrap();
+        timer.summary_ms(self.max_n, s.mean, s.std_dev);
       }
     }
 
@@ -408,40 +410,46 @@ impl Case {
   where
     CUT: GetCUT,
   {
-    println!("\n=== Get Benchmark ({}) ===\n", cut.implementation());
+    println!("\n{}", Local::now().format("%Y-%m-%d %H:%M:%S %Z"));
+    println!("=== Get Benchmark ({}) ===", cut.implementation());
 
     // データベースを作成
+    let start = Instant::now();
+    print!("Preparing database with {} entries: ", self.max_n);
+    stdout().flush().unwrap();
     cut.prepare(self.max_n, splitmix64)?;
     cut.set_cache_level(cache_level)?;
+    println!("{}ms: done\n", start.elapsed().as_millis());
 
-    println!("DataSize\tCV[%]\t\tTrials");
-    println!("--------\t--------\t----------");
+    let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
+    ExpirationTimer::heading_max_cv();
 
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
     let mut gauge = self.gauge();
     let start = Instant::now();
-    for trials in 0..self.max_trials {
-      if trials > self.min_trials {
+    'trials: for trials in 0..self.max_trials {
+      gauge.shuffle(&mut rng);
+      for i in gauge.iter() {
+        let duration = cut.get(*i, splitmix64)?;
+        time_complexity.add(i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
+
+        if start.elapsed() >= self.max_duration {
+          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+          println!("** TIMED OUT **");
+          break 'trials;
+        }
+      }
+
+      if trials + 1 >= self.min_trials {
         gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
         if gauge.is_empty() {
-          println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
+          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
           break;
         }
       }
-      if start.elapsed() >= self.max_duration {
-        println!("** TIMED OUT **");
-        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
-        break;
-      }
-
-      gauge.shuffle(&mut rng);
-      let results = cut.gets(&gauge, splitmix64)?;
-      for (i, duration) in results {
-        time_complexity.add(&i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
-      }
-      if (trials + 1) % 100 == 0 {
-        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
+      if timer.carried_out(1) {
+        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
       }
     }
 
@@ -458,37 +466,43 @@ impl Case {
   where
     CUT: GetCUT,
   {
-    println!("\n=== Zipf Get Benchmark ({}) ===\n", cut.implementation());
+    println!("\n{}", Local::now().format("%Y-%m-%d %H:%M:%S %Z"));
+    println!("=== Zipf Get Benchmark ({}) ===", cut.implementation());
 
     // データベースを作成
+    let start = Instant::now();
+    print!("Preparing database with {} entries: ", self.max_n);
+    stdout().flush().unwrap();
     cut.prepare(self.max_n, splitmix64)?;
     cut.set_cache_level(0)?;
-
-    println!("Shape\t\tDataSize\tMean\t\tStdDev\t\tMax\t\tTrials");
-    println!("--------\t--------\t--------\t--------\t--------\t----------");
+    println!("{}ms: done", start.elapsed().as_millis());
 
     let mut position_frequency = XYReport::new(Unit::Bytes);
     let mut time_frequency = XYReport::new(Unit::Milliseconds);
-    let mut batch = Vec::with_capacity(self.max_trials);
     for s in [0.5, 1.2, 1.5, 2.0] {
       let x_label = format!("{s:.1}");
+      println!("\nShape = {x_label}");
+      let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
+      ExpirationTimer::heading_ms();
+
       let mut dist = ZipfDistribution::new(100, s, self.max_n - 1);
       for _ in 0..self.max_trials {
-        batch.truncate(0);
-        while batch.len() < batch.capacity() {
-          batch.push(dist.next_u64());
+        let position = dist.next_u64();
+        let d = cut.get(position, splitmix64)?;
+        time_frequency.add(&x_label, d.as_nanos() as f64 / 1000.0 / 1000.0);
+        position_frequency.add(&x_label, position);
+
+        if timer.expired() {
+          let s = time_frequency.calculate(&x_label).unwrap();
+          timer.summary_ms(self.max_n, s.mean, s.std_dev);
+          println!("** TIMED OUT **");
+          break;
+        }
+        if timer.carried_out(1) {
+          let s = time_frequency.calculate(&x_label).unwrap();
+          timer.summary_ms(self.max_n, s.mean, s.std_dev);
         }
       }
-
-      let results = cut.gets(&batch, splitmix64)?;
-      time_frequency
-        .append(&x_label, results.iter().map(|(_, d)| d.as_nanos() as f64 / 1000.0 / 1000.0).collect::<Vec<_>>());
-      position_frequency.append(&x_label, batch.clone());
-      let stat = time_frequency.calculate(&x_label).unwrap();
-      println!(
-        "{}\t\t{}\t\t{:.3}\t\t{:.3}\t\t{:.3}\t\t{}",
-        x_label, self.max_n, stat.mean, stat.std_dev, stat.max, self.max_trials
-      );
     }
 
     // write report
@@ -506,10 +520,13 @@ impl Case {
   where
     CUT: ProveCUT,
   {
-    println!("\n=== Prove Benchmark ({}) ===\n", cut.implementation());
+    println!("\n{}", Local::now().format("%Y-%m-%d %H:%M:%S %Z"));
+    println!("=== Prove Benchmark ({}) ===", cut.implementation());
     let mut gauge = self.gauge();
 
-    println!("Creating {} files with one difference each..", gauge.len());
+    print!("Preparing {} files with one difference each: ", gauge.len());
+    stdout().flush().unwrap();
+    let start = Instant::now();
     cut.prepare(self.max_n, splitmix64)?;
     let (mut errs, targets): (Vec<Error>, Vec<_>) = gauge
       .iter()
@@ -522,6 +539,8 @@ impl Case {
             let value = splitmix64(k);
             if i == k { splitmix64(value) } else { value }
           })?;
+          print!("*");
+          stdout().flush().unwrap();
           Ok((i, alt))
         }
         Err(err) => Err(err),
@@ -530,6 +549,7 @@ impl Case {
         Ok(target) => Either::Right(target),
         Err(err) => Either::Left(err),
       });
+    print!(": {}ms: done: ", start.elapsed().as_millis());
     if !errs.is_empty() {
       println!("preparation failure");
       drop(targets);
@@ -539,28 +559,15 @@ impl Case {
       return Err(errs.pop().unwrap());
     }
     let cuts = targets.into_iter().collect::<HashMap<_, _>>();
-    println!("preparation completed");
+    println!("preparation completed\n");
 
-    println!("DataSize\tCV[%]\t\tTrials");
-    println!("--------\t--------\t----------");
+    let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
+    ExpirationTimer::heading_max_cv();
 
     let mut rng = rand::rng();
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let start = Instant::now();
     for trials in 0..self.max_trials {
-      if trials > self.min_trials {
-        gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
-        if gauge.is_empty() {
-          println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
-          break;
-        }
-      }
-      if start.elapsed() >= self.max_duration {
-        println!("** TIMED OUT **");
-        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials, self.max_trials);
-        break;
-      }
-
       gauge.shuffle(&mut rng);
       for i in gauge.iter().cloned() {
         let other = cuts.get(&i).unwrap();
@@ -568,8 +575,21 @@ impl Case {
         assert_eq!(Some(i), result);
         time_complexity.add(&(self.max_n - i + 1), elapse.as_nanos() as f64 / 1000.0 / 1000.0);
       }
-      if trials % 100 == 99 {
-        println!("{}\t\t{:.3}\t\t{}/{}", self.max_n, time_complexity.max_cv(), trials + 1, self.max_trials);
+
+      if trials + 1 >= self.min_trials {
+        gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
+        if gauge.is_empty() {
+          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+          break;
+        }
+      }
+      if start.elapsed() >= self.max_duration {
+        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+        println!("** TIMED OUT **");
+        break;
+      }
+      if timer.carried_out(1) {
+        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
       }
     }
 
@@ -578,8 +598,6 @@ impl Case {
     let path = self.dir_report.join(format!("{}.csv", self.name(&id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "DETECT TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-
-    drop(cuts);
     Ok(self)
   }
 }
@@ -597,7 +615,7 @@ pub trait CUT {
 pub trait GetCUT: CUT {
   fn set_cache_level(&mut self, cache_size: usize) -> Result<()>;
   fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()>;
-  fn gets<V: Fn(u64) -> u64>(&mut self, is: &[Index], values: V) -> Result<Vec<(u64, Duration)>>;
+  fn get<V: Fn(u64) -> u64>(&mut self, i: Index, values: V) -> Result<Duration>;
 }
 
 pub trait AppendCUT: CUT {
