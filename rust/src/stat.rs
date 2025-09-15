@@ -209,9 +209,13 @@ impl ExpirationTimer {
   }
 
   pub fn estimated_end_time(&self) -> Instant {
-    let avr_per_trial = self.elapsed() / self.current as u32;
-    let total_estimate = avr_per_trial * self.max_trials as u32;
-    self.start + total_estimate
+    if self.current == 0 {
+      Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)
+    } else {
+      let avr_per_trial = self.elapsed() / self.current as u32;
+      let total_estimate = avr_per_trial * self.max_trials as u32;
+      self.start + total_estimate
+    }
   }
 
   pub fn eta(&self) -> String {
