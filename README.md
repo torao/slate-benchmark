@@ -23,10 +23,10 @@ sudo timedatectl set-timezone Asia/Tokyo
 
 lsblk -f
 sudo mkfs.ext4 /dev/nvme1n1
-sudo mkdir /mnt/bench
-sudo mount /dev/nvme1n1 /mnt/bench
-sudo chown ubuntu:ubuntu /mnt/bench
-mkdir /mnt/bench/slate
+sudo mkdir /mnt/slate
+sudo mount /dev/nvme1n1 /mnt/slate
+sudo chown ubuntu:ubuntu /mnt/slate
+mkdir /mnt/slate/bench
 df -h
 
 # setup mise

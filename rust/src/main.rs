@@ -70,18 +70,9 @@ fn main() -> Result<()> {
 
   let dir = experiment.work_dir()?;
   {
-    let mut cut = SeqFileCUT::new(&dir)?;
+    let mut cut = SlateCUT::new(MemKVSFactory::new(args.data_size as usize))?;
     experiment
       .run_testunit_append(&mut cut)?
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
-      .clear()?;
-  }
-
-  {
-    let mut cut = FileBinaryTreeCUT::new(&dir, args.data_size)?;
-    experiment
       .run_testunit_biased_get(&mut cut)?
       .run_testunit_uniformed_get(&mut cut)?
       .run_testunit_cache_level(&mut cut)?
@@ -102,9 +93,27 @@ fn main() -> Result<()> {
       .clear()?;
     Ok(())
   }
-  _run_slate_cut(&experiment, &mut SlateCUT::new(MemKVSFactory::new(args.data_size as usize))?)?;
   _run_slate_cut(&experiment, &mut SlateCUT::new(FileFactory::new(&dir))?)?;
   _run_slate_cut(&experiment, &mut SlateCUT::new(RocksDBFactory::new(&dir))?)?;
+
+  {
+    let mut cut = SeqFileCUT::new(&dir)?;
+    experiment
+      .run_testunit_append(&mut cut)?
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .clear()?;
+  }
+
+  {
+    let mut cut = FileBinaryTreeCUT::new(&dir, args.data_size)?;
+    experiment
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .clear()?;
+  }
 
   fs::remove_dir_all(&dir)?;
   Ok(())
@@ -427,14 +436,13 @@ impl Case {
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
     let mut gauge = self.gauge();
-    let start = Instant::now();
     'trials: for trials in 0..self.max_trials {
       gauge.shuffle(&mut rng);
       for i in gauge.iter() {
         let duration = cut.get(*i, splitmix64)?;
         time_complexity.add(i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
 
-        if start.elapsed() >= self.max_duration {
+        if timer.expired() {
           timer.summary_max_cv(self.max_n, time_complexity.max_cv());
           println!("** TIMED OUT **");
           break 'trials;
@@ -566,7 +574,6 @@ impl Case {
 
     let mut rng = rand::rng();
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
-    let start = Instant::now();
     for trials in 0..self.max_trials {
       gauge.shuffle(&mut rng);
       for i in gauge.iter().cloned() {
@@ -583,7 +590,7 @@ impl Case {
           break;
         }
       }
-      if start.elapsed() >= self.max_duration {
+      if timer.expired() {
         timer.summary_max_cv(self.max_n, time_complexity.max_cv());
         println!("** TIMED OUT **");
         break;
