@@ -271,7 +271,6 @@ impl Experiment {
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
-      .cv_threshold(0.5)
       .measure_the_retrieval_time_relative_to_the_position(cut, "get", 0)?;
     Ok(self)
   }
@@ -283,7 +282,6 @@ impl Experiment {
         .division(64)
         .scale(Scale::WorstCase)
         .max_trials(1000)
-        .cv_threshold(0.5)
         .measure_the_retrieval_time_relative_to_the_position(cut, &format!("cache{level}"), level)?;
     }
     Ok(self)
