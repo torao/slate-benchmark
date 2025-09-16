@@ -326,8 +326,8 @@ impl Column {
   pub fn len(&self) -> usize {
     self.label().len().max(match self {
       Self::DataSize(_) => 10,
-      Self::MeanMS(_) => 9,
-      Self::StdDevMS(_) => 9,
+      Self::MeanMS(_) => 12,
+      Self::StdDevMS(_) => 12,
       Self::CV(_) => 6,
       Self::Trials(_) => 9,
       Self::Eta(_) => 18,
