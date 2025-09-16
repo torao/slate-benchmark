@@ -252,7 +252,7 @@ impl ExpirationTimer {
 
     if (self.last_noticed.elapsed() >= self.notice_interval)
       || self.current >= self.max_trials
-      || (current != 0 && (self.current / self.interval != current / self.interval))
+      || (self.current / self.interval != current / self.interval)
     {
       self.last_noticed = Instant::now();
       true

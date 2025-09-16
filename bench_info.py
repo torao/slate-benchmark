@@ -565,7 +565,7 @@ def create_markdown_report(target_dir, storage_info, io_perf, cpu_info, memory_i
   
   with open(filepath, 'w', encoding='utf-8') as f:
     f.write(f"# Benchmark Environment Report\n\n")
-    f.write(f"- **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    f.write(f"- **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
     f.write(f"- **Target Directory:** `{target_dir}`\n\n")
     
     # システム情報

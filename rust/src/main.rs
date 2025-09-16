@@ -5,7 +5,7 @@ use chrono::Local;
 use clap::Parser;
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
-use rayon::prelude::*;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use slate_benchmark::{ZipfDistribution, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -534,29 +534,32 @@ impl Case {
 
     print!("Preparing {} files with one difference each: ", gauge.len());
     stdout().flush().unwrap();
+    let thread_pool = ThreadPoolBuilder::new().num_threads(25).build().unwrap();
     let start = Instant::now();
     cut.prepare(self.max_n, splitmix64)?;
-    let (mut errs, targets): (Vec<Error>, Vec<_>) = gauge
-      .iter()
-      .copied()
-      .map(|i| (i, cut.alternate()))
-      .par_bridge()
-      .map(|(i, alt)| match alt {
-        Ok(mut alt) => {
-          alt.prepare(self.max_n, |k| {
-            let value = splitmix64(k);
-            if i == k { splitmix64(value) } else { value }
-          })?;
-          print!("*");
-          stdout().flush().unwrap();
-          Ok((i, alt))
-        }
-        Err(err) => Err(err),
-      })
-      .partition_map(|target| match target {
-        Ok(target) => Either::Right(target),
-        Err(err) => Either::Left(err),
-      });
+    let (mut errs, targets): (Vec<Error>, Vec<_>) = thread_pool.install(|| {
+      gauge
+        .iter()
+        .copied()
+        .map(|i| (i, cut.alternate()))
+        .par_bridge()
+        .map(|(i, alt)| match alt {
+          Ok(mut alt) => {
+            alt.prepare(self.max_n, |k| {
+              let value = splitmix64(k);
+              if i == k { splitmix64(value) } else { value }
+            })?;
+            print!("*");
+            stdout().flush().unwrap();
+            Ok((i, alt))
+          }
+          Err(err) => Err(err),
+        })
+        .partition_map(|target| match target {
+          Ok(target) => Either::Right(target),
+          Err(err) => Either::Left(err),
+        })
+    });
     print!(": {}ms: done: ", start.elapsed().as_millis());
     if !errs.is_empty() {
       println!("preparation failure");
