@@ -629,7 +629,7 @@ fn filter_cv_sufficient(gauge: &[u64], ss: &stat::XYReport<u64, f64>, cv: f64) -
 
 // プログレスバーの準備
 fn create_progress_bar(n: u64) -> ProgressBar {
-  let pb = ProgressBar::with_draw_target(Some(n), ProgressDrawTarget::stderr_with_hz(2));
+  let pb = ProgressBar::with_draw_target(Some(n), ProgressDrawTarget::stderr_with_hz(1));
   pb.set_style(
     ProgressStyle::default_bar()
       .template("Preparing: {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
