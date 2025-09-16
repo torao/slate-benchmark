@@ -3,17 +3,16 @@ use ::slate::formula::{entry_access_distance, entry_access_distance_limits};
 use ::slate::{Index, Result};
 use chrono::Local;
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
-use rayon::{ThreadPoolBuilder, prelude::*};
+use rayon::prelude::*;
 use slate_benchmark::{ZipfDistribution, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Write, stdout};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::binarytree::FileBinaryTreeCUT;
 use crate::seqfile::SeqFileCUT;
@@ -32,6 +31,10 @@ struct Args {
   /// ベンチマークで使用するデータサイズ（エントリ数）
   #[arg(default_value_t = 256u64)]
   data_size: u64,
+
+  /// ベンチマークで使用するデータサイズ（エントリ数）
+  #[arg(default_value_t = 65536u64)]
+  data_size_large: u64,
 
   /// ベンチマーク実行時の作業用一時ファイルを格納するディレクトリ
   #[arg(short, long, default_value_t = std::env::temp_dir().to_string_lossy().into_owned())]
@@ -70,53 +73,45 @@ fn main() -> Result<()> {
   }
 
   let dir = experiment.work_dir()?;
-  {
-    let mut cut = SlateCUT::new(MemKVSFactory::new(args.data_size as usize))?;
-    experiment
-      .run_testunit_append(&mut cut)?
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
-      .clear()?;
-  }
+  let small = DataSize::Small(args.data_size);
+  let large = DataSize::Large(args.data_size_large);
 
   {
     let mut cut = SlateCUT::new(FileFactory::new(&dir))?;
     experiment
-      .run_testunit_append(&mut cut)?
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
-      .run_testunit_prove(&mut cut)?
+      .run_testunit_append(&mut cut, &small)?
+      .run_testunit_biased_get(&mut cut, &small)?
+      .run_testunit_uniformed_get(&mut cut, &small)?
+      .run_testunit_cache_level(&mut cut, &small)?
+      .run_testunit_prove(&mut cut, &small)?
+      .run_testunit_biased_get(&mut cut, &large)?
+      .run_testunit_uniformed_get(&mut cut, &large)?
+      .run_testunit_cache_level(&mut cut, &large)?
       .clear()?;
   }
 
+  fn run_testsuite<C>(experiment: &Experiment, ds: &DataSize, cut: &mut C) -> Result<()>
+  where
+    C: GetCUT + AppendCUT,
   {
-    let mut cut = SlateCUT::new(RocksDBFactory::new(&dir))?;
     experiment
-      .run_testunit_append(&mut cut)?
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
+      .run_testunit_append(cut, ds)?
+      .run_testunit_biased_get(cut, ds)?
+      .run_testunit_uniformed_get(cut, ds)?
+      .run_testunit_cache_level(cut, ds)?
       .clear()?;
+    Ok(())
   }
-
-  {
-    let mut cut = SeqFileCUT::new(&dir)?;
-    experiment
-      .run_testunit_append(&mut cut)?
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
-      .clear()?;
-  }
+  run_testsuite(&experiment, &small, &mut SlateCUT::new(MemKVSFactory::new(args.data_size as usize))?)?;
+  run_testsuite(&experiment, &small, &mut SlateCUT::new(RocksDBFactory::new(&dir))?)?;
+  run_testsuite(&experiment, &small, &mut SeqFileCUT::new(&dir)?)?;
 
   {
     let mut cut = FileBinaryTreeCUT::new(&dir, args.data_size)?;
     experiment
-      .run_testunit_biased_get(&mut cut)?
-      .run_testunit_uniformed_get(&mut cut)?
-      .run_testunit_cache_level(&mut cut)?
+      .run_testunit_biased_get(&mut cut, &small)?
+      .run_testunit_uniformed_get(&mut cut, &small)?
+      .run_testunit_cache_level(&mut cut, &small)?
       .clear()?;
   }
 
@@ -140,15 +135,12 @@ struct Experiment {
   min_trials: usize,        // 例: 5
   max_trials: usize,        // 例: 100
   max_duration: Duration,   // 例: Duration::from_secs(30),
-  data_size: Index,
 }
 
 pub struct Case {
   pub session: String,
   pub dir: PathBuf,
   pub dir_report: PathBuf,
-  pub min_n: Index,
-  pub max_n: Index,
   scale: Scale,
   division: usize,
   cv_threshold: f64,      // 例: 0.10 (=10%)
@@ -174,16 +166,13 @@ impl Experiment {
     let min_trials = 5;
     let max_trials = 1000;
     let max_duration = Duration::from_secs(args.timeout);
-    let data_size = args.data_size;
-    Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration, data_size })
+    Ok(Self { session, dir, dir_report, stability_threshold, min_trials, max_trials, max_duration })
   }
 
   pub fn case(&self) -> Result<Case> {
     let session = self.session.clone();
     let dir = self.dir.clone();
     let dir_report = self.dir_report.clone();
-    let min_n = 1;
-    let max_n = self.data_size;
     let scale = Scale::Linear;
     let division = 100;
 
@@ -195,8 +184,6 @@ impl Experiment {
       session,
       dir,
       dir_report,
-      min_n,
-      max_n,
       scale,
       division,
       cv_threshold: stability_threshold,
@@ -260,40 +247,45 @@ impl Experiment {
     Ok(())
   }
 
-  fn run_testunit_append<C: AppendCUT>(&self, cut: &mut C) -> Result<&Experiment> {
-    self.case()?.division(10).min_trials(2).max_trials(10).measure_the_append_time_relative_to_the_data_amount(cut)?;
+  fn run_testunit_append<C: AppendCUT>(&self, cut: &mut C, ds: &DataSize) -> Result<&Experiment> {
+    self
+      .case()?
+      .division(10)
+      .min_trials(2)
+      .max_trials(10)
+      .measure_the_append_time_relative_to_the_data_amount(cut, ds)?;
     Ok(self)
   }
 
-  fn run_testunit_biased_get<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
-    self.case()?.max_trials(500).measure_the_frequency_of_retrieval_against_positions_by_zipf(cut)?;
+  fn run_testunit_biased_get<C: GetCUT>(&self, cut: &mut C, ds: &DataSize) -> Result<&Experiment> {
+    self.case()?.max_trials(500).measure_the_frequency_of_retrieval_against_positions_by_zipf(cut, ds)?;
     Ok(self)
   }
 
-  fn run_testunit_uniformed_get<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+  fn run_testunit_uniformed_get<C: GetCUT>(&self, cut: &mut C, ds: &DataSize) -> Result<&Experiment> {
     self
       .case()?
       .division(100)
       .scale(Scale::WorstCase)
       .max_trials(500)
-      .measure_the_retrieval_time_relative_to_the_position(cut, "get", 0)?;
+      .measure_the_retrieval_time_relative_to_the_position(cut, "get", 0, ds)?;
     Ok(self)
   }
 
-  fn run_testunit_cache_level<C: GetCUT>(&self, cut: &mut C) -> Result<&Experiment> {
+  fn run_testunit_cache_level<C: GetCUT>(&self, cut: &mut C, ds: &DataSize) -> Result<&Experiment> {
     for level in 0..=3 {
       self
         .case()?
         .division(64)
         .scale(Scale::WorstCase)
         .max_trials(1000)
-        .measure_the_retrieval_time_relative_to_the_position(cut, &format!("cache{level}"), level)?;
+        .measure_the_retrieval_time_relative_to_the_position(cut, &format!("cache{level}"), level, ds)?;
     }
     Ok(self)
   }
 
-  fn run_testunit_prove<C: ProveCUT>(&self, cut: &mut C) -> Result<&Experiment> {
-    self.case()?.scale(Scale::WorstCase).measure_the_prove_time_relative_to_the_position(cut)?;
+  fn run_testunit_prove<C: ProveCUT>(&self, cut: &mut C, ds: &DataSize) -> Result<&Experiment> {
+    self.case()?.scale(Scale::WorstCase).measure_the_prove_time_relative_to_the_position(cut, ds)?;
     Ok(self)
   }
 }
@@ -308,8 +300,6 @@ macro_rules! property_decl {
 }
 
 impl Case {
-  property_decl!(min_n, Index);
-  property_decl!(max_n, Index);
   property_decl!(division, usize);
   property_decl!(scale, Scale);
   property_decl!(cv_threshold, f64);
@@ -333,22 +323,22 @@ impl Case {
     dir_work
   }
 
-  fn gauge(&self) -> Vec<u64> {
+  fn gauge(&self, n: Index) -> Vec<u64> {
     let gauge = match self.scale {
-      Scale::Linear => linspace(self.min_n, self.max_n, self.division),
-      Scale::Log => logspace(self.min_n, self.max_n, self.division),
+      Scale::Linear => linspace(1, n, self.division),
+      Scale::Log => logspace(1, n, self.division),
       Scale::BestCase => {
-        let (_, ll) = entry_access_distance_limits(self.max_n);
+        let (_, ll) = entry_access_distance_limits(n);
         ll.into_iter()
           .enumerate()
-          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
+          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, n).unwrap() == d as u8))
           .collect::<Vec<_>>()
       }
       Scale::WorstCase => {
-        let (ul, _) = entry_access_distance_limits(self.max_n);
+        let (ul, _) = entry_access_distance_limits(n);
         ul.into_iter()
           .enumerate()
-          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, self.max_n).unwrap() == d as u8))
+          .flat_map(|(d, range)| range.filter(move |k| entry_access_distance(*k, n).unwrap() == d as u8))
           .collect::<Vec<_>>()
       }
     };
@@ -358,7 +348,7 @@ impl Case {
   }
 
   /// データ量に対する追記時間を計測します。
-  pub fn measure_the_append_time_relative_to_the_data_amount<CUT>(self, cut: &mut CUT) -> Result<Self>
+  pub fn measure_the_append_time_relative_to_the_data_amount<CUT>(self, cut: &mut CUT, ds: &DataSize) -> Result<Self>
   where
     CUT: AppendCUT,
   {
@@ -370,7 +360,7 @@ impl Case {
 
     let mut space_complexity = stat::XYReport::new(stat::Unit::Bytes);
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
-    let gauge = self.gauge();
+    let gauge = self.gauge(ds.size());
     for trials in 0..self.max_trials {
       cut.clear()?;
       let mut cum_time = Duration::ZERO;
@@ -384,28 +374,28 @@ impl Case {
       }
 
       if trials + 1 >= self.min_trials && filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold).is_empty() {
-        let s = time_complexity.calculate(&self.max_n).unwrap();
-        timer.summary_ms(self.max_n, s.mean, s.std_dev);
+        let s = time_complexity.calculate(&ds.size()).unwrap();
+        timer.summary_ms(ds.size(), s.mean, s.std_dev);
         break;
       }
       if timer.expired() {
-        let s = time_complexity.calculate(&self.max_n).unwrap();
-        timer.summary_ms(self.max_n, s.mean, s.std_dev);
+        let s = time_complexity.calculate(&ds.size()).unwrap();
+        timer.summary_ms(ds.size(), s.mean, s.std_dev);
         println!("** TIMED OUT **");
         break;
       }
       if timer.carried_out(1) {
-        let s = time_complexity.calculate(&self.max_n).unwrap();
-        timer.summary_ms(self.max_n, s.mean, s.std_dev);
+        let s = time_complexity.calculate(&ds.size()).unwrap();
+        timer.summary_ms(ds.size(), s.mean, s.std_dev);
       }
     }
 
     // write report
-    let name = format!("{}-volume-{}", self.session, cut.implementation());
+    let name = format!("{}-volume{}-{}", self.session, ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{name}.csv"));
     space_complexity.save_xy_to_csv(&path, "SIZE", "BYTES")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
-    let name = format!("{}-append-{}", self.session, cut.implementation());
+    let name = format!("{}-append{}-{}", self.session, ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{name}.csv"));
     time_complexity.save_xy_to_csv(&path, "SIZE", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
@@ -418,6 +408,7 @@ impl Case {
     cut: &mut CUT,
     action_id: &str,
     cache_level: usize,
+    ds: &DataSize,
   ) -> Result<Self>
   where
     CUT: GetCUT,
@@ -426,19 +417,17 @@ impl Case {
     println!("=== Get Benchmark ({}) ===", cut.implementation());
 
     // データベースを作成
-    let start = Instant::now();
-    print!("Preparing database with {} entries: ", self.max_n);
-    stdout().flush().unwrap();
-    cut.prepare(self.max_n, splitmix64)?;
-    cut.set_cache_level(cache_level)?;
-    println!("{}ms: done\n", start.elapsed().as_millis());
+    let pb = create_progress_bar(ds.size());
+    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
+    pb.finish();
 
     let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
     ExpirationTimer::heading_max_cv();
 
     let mut time_complexity = stat::XYReport::new(stat::Unit::Milliseconds);
     let mut rng = rand::rng();
-    let mut gauge = self.gauge();
+    let mut gauge = self.gauge(ds.size());
+    cut.set_cache_level(cache_level)?;
     'trials: for trials in 0..self.max_trials {
       gauge.shuffle(&mut rng);
       for i in gauge.iter() {
@@ -446,7 +435,7 @@ impl Case {
         time_complexity.add(i, duration.as_nanos() as f64 / 1000.0 / 1000.0);
 
         if timer.expired() {
-          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+          timer.summary_max_cv(ds.size(), time_complexity.max_cv());
           println!("** TIMED OUT **");
           break 'trials;
         }
@@ -455,17 +444,17 @@ impl Case {
       if trials + 1 >= self.min_trials {
         gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
         if gauge.is_empty() {
-          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+          timer.summary_max_cv(ds.size(), time_complexity.max_cv());
           break;
         }
       }
       if timer.carried_out(1) {
-        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+        timer.summary_max_cv(ds.size(), time_complexity.max_cv());
       }
     }
 
     // write report
-    let id = format!("{action_id}-{}", cut.implementation());
+    let id = format!("{action_id}{}-{}", ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{}.csv", self.name(&id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "ACCESS TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
@@ -473,7 +462,11 @@ impl Case {
   }
 
   /// Zipf 分布に従うアクセス位置に対するデータ取得時間の頻度を計測します。
-  pub fn measure_the_frequency_of_retrieval_against_positions_by_zipf<CUT>(self, cut: &mut CUT) -> Result<Self>
+  pub fn measure_the_frequency_of_retrieval_against_positions_by_zipf<CUT>(
+    self,
+    cut: &mut CUT,
+    ds: &DataSize,
+  ) -> Result<Self>
   where
     CUT: GetCUT,
   {
@@ -481,22 +474,20 @@ impl Case {
     println!("=== Zipf Get Benchmark ({}) ===", cut.implementation());
 
     // データベースを作成
-    let start = Instant::now();
-    print!("Preparing database with {} entries: ", self.max_n);
-    stdout().flush().unwrap();
-    cut.prepare(self.max_n, splitmix64)?;
-    cut.set_cache_level(0)?;
-    println!("{}ms: done", start.elapsed().as_millis());
+    let pb = create_progress_bar(ds.size());
+    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
+    pb.finish();
 
     let mut position_frequency = XYReport::new(Unit::Bytes);
     let mut time_frequency = XYReport::new(Unit::Milliseconds);
+    cut.set_cache_level(0)?;
     for s in [0.5, 1.2, 1.5, 2.0] {
       let x_label = format!("{s:.1}");
       println!("\nShape = {x_label}");
       let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
       ExpirationTimer::heading_ms();
 
-      let mut dist = ZipfDistribution::new(100, s, self.max_n - 1);
+      let mut dist = ZipfDistribution::new(100, s, ds.size() - 1);
       for _ in 0..self.max_trials {
         let position = dist.next_u64();
         let d = cut.get(position, splitmix64)?;
@@ -505,19 +496,19 @@ impl Case {
 
         if timer.expired() {
           let s = time_frequency.calculate(&x_label).unwrap();
-          timer.summary_ms(self.max_n, s.mean, s.std_dev);
+          timer.summary_ms(ds.size(), s.mean, s.std_dev);
           println!("** TIMED OUT **");
           break;
         }
         if timer.carried_out(1) {
           let s = time_frequency.calculate(&x_label).unwrap();
-          timer.summary_ms(self.max_n, s.mean, s.std_dev);
+          timer.summary_ms(ds.size(), s.mean, s.std_dev);
         }
       }
     }
 
     // write report
-    let id = format!("biased-get-{}", cut.implementation());
+    let id = format!("biased-get{}-{}", ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{}_x.csv", self.name(&id)));
     position_frequency.save_xy_to_csv(&path, "ZIPF", "POSITION")?;
     let path = self.dir_report.join(format!("{}_y.csv", self.name(&id)));
@@ -527,49 +518,40 @@ impl Case {
   }
 
   // データ差異の位置に対する差分検出時間を計測します。
-  fn measure_the_prove_time_relative_to_the_position<CUT>(self, cut: &mut CUT) -> Result<Self>
+  fn measure_the_prove_time_relative_to_the_position<CUT>(self, cut: &mut CUT, ds: &DataSize) -> Result<Self>
   where
     CUT: ProveCUT,
   {
     println!("\n{}", Local::now().format("%Y-%m-%d %H:%M:%S %Z"));
     println!("=== Prove Benchmark ({}) ===", cut.implementation());
-    let mut gauge = self.gauge();
+    let mut gauge = self.gauge(ds.size());
 
-    // プログレスバーの準備
-    let pb = ProgressBar::new(gauge.len() as u64 * self.max_n);
-    pb.set_style(
-      ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-        .map_err(|e| ::slate::error::Error::Otherwise { source: e.into() })?
-        .progress_chars("#>-"),
-    );
-
-    println!("Preparing {} files with one difference each...", gauge.len());
-    let thread_pool = ThreadPoolBuilder::new().num_threads(25).build().unwrap();
-    cut.prepare(self.max_n, splitmix64)?;
-    let (mut errs, targets): (Vec<Error>, Vec<_>) = thread_pool.install(|| {
-      gauge
-        .iter()
-        .copied()
-        .map(|i| (i, cut.alternate()))
-        .par_bridge()
-        .map(|(i, alt)| match alt {
-          Ok(mut alt) => {
-            alt.prepare(self.max_n, |k| {
-              pb.inc(1);
+    let pb = create_progress_bar((1 + gauge.len()) as u64 * ds.size());
+    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
+    pb.set_position(ds.size());
+    let (mut errs, targets): (Vec<Error>, Vec<_>) = gauge
+      .iter()
+      .copied()
+      .map(|i| (i, cut.alternate()))
+      .par_bridge()
+      .map(|(i, alt)| match alt {
+        Ok(mut alt) => {
+          alt.prepare(
+            ds.size(),
+            |k| {
               let value = splitmix64(k);
               if i == k { splitmix64(value) } else { value }
-            })?;
-            stdout().flush().unwrap();
-            Ok((i, alt))
-          }
-          Err(err) => Err(err),
-        })
-        .partition_map(|target| match target {
-          Ok(target) => Either::Right(target),
-          Err(err) => Either::Left(err),
-        })
-    });
+            },
+            |_i| pb.inc(1),
+          )?;
+          Ok((i, alt))
+        }
+        Err(err) => Err(err),
+      })
+      .partition_map(|target| match target {
+        Ok(target) => Either::Right(target),
+        Err(err) => Either::Left(err),
+      });
     pb.finish();
     if !errs.is_empty() {
       drop(targets);
@@ -592,28 +574,28 @@ impl Case {
         let other = cuts.get(&i).unwrap();
         let (result, elapse) = cut.prove(other)?;
         assert_eq!(Some(i), result);
-        time_complexity.add(&(self.max_n - i + 1), elapse.as_nanos() as f64 / 1000.0 / 1000.0);
+        time_complexity.add(&(ds.size() - i + 1), elapse.as_nanos() as f64 / 1000.0 / 1000.0);
       }
 
       if trials + 1 >= self.min_trials {
         gauge = filter_cv_sufficient(&gauge, &time_complexity, self.cv_threshold);
         if gauge.is_empty() {
-          timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+          timer.summary_max_cv(ds.size(), time_complexity.max_cv());
           break;
         }
       }
       if timer.expired() {
-        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+        timer.summary_max_cv(ds.size(), time_complexity.max_cv());
         println!("** TIMED OUT **");
         break;
       }
       if timer.carried_out(1) {
-        timer.summary_max_cv(self.max_n, time_complexity.max_cv());
+        timer.summary_max_cv(ds.size(), time_complexity.max_cv());
       }
     }
 
     // write report
-    let id = format!("prove-{}", cut.implementation());
+    let id = format!("prove{}-{}", ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{}.csv", self.name(&id)));
     time_complexity.save_xy_to_csv(&path, "DISTANCE", "DETECT TIME")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());
@@ -621,8 +603,40 @@ impl Case {
   }
 }
 
+pub enum DataSize {
+  Large(u64),
+  Small(u64),
+}
+
+impl DataSize {
+  pub fn size(&self) -> u64 {
+    match self {
+      DataSize::Large(len) => *len,
+      DataSize::Small(len) => *len,
+    }
+  }
+  pub fn file_id(&self) -> String {
+    match self {
+      DataSize::Large(_) => String::from(""),
+      DataSize::Small(_) => String::from("_large"),
+    }
+  }
+}
+
 fn filter_cv_sufficient(gauge: &[u64], ss: &stat::XYReport<u64, f64>, cv: f64) -> Vec<u64> {
   gauge.iter().filter(|i| !ss.is_cv_sufficient(**i, cv)).cloned().collect::<Vec<_>>()
+}
+
+// プログレスバーの準備
+fn create_progress_bar(n: u64) -> ProgressBar {
+  let pb = ProgressBar::with_draw_target(Some(n), ProgressDrawTarget::stderr_with_hz(2));
+  pb.set_style(
+    ProgressStyle::default_bar()
+      .template("Preparing: {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+      .unwrap()
+      .progress_chars("#>-"),
+  );
+  pb
 }
 
 // Component under Test.
@@ -633,7 +647,7 @@ pub trait CUT {
 
 pub trait GetCUT: CUT {
   fn set_cache_level(&mut self, cache_size: usize) -> Result<()>;
-  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()>;
+  fn prepare<V: Fn(u64) -> u64, F: Fn(Index)>(&mut self, n: Index, values: V, progress: F) -> Result<()>;
   fn get<V: Fn(u64) -> u64>(&mut self, i: Index, values: V) -> Result<Duration>;
 }
 

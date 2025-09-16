@@ -56,10 +56,12 @@ impl GetCUT for FileBinaryTreeCUT {
     Ok(())
   }
 
-  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+  fn prepare<V: Fn(u64) -> u64, P: Fn(Index)>(&mut self, n: Index, values: V, progress: P) -> Result<()> {
     assert_eq!((n & (n - 1)), 0, "must be binary");
     BinaryHashTree::create_on_file(&self.path, u64::ilog2(n) as u8 + 1, 1 << self.cache_level, |i| {
-      values(i).to_le_bytes().to_vec()
+      let bytes = values(i).to_le_bytes().to_vec();
+      (progress)(i);
+      bytes
     })?;
     Ok(())
   }

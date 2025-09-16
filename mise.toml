@@ -5,11 +5,13 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-WORK_DIR = "/mnt/slate/bench"       # 2TB required, minimum 1.6TB, for 8M entries
+WORK_DIR = "/mnt/slate/bench"       # 2TB required, minimum 1.6TB, for 8M entries prove
 DATA_SIZE = "{{ 8 * 1024 * 1024 }}" # 16GB memory required
+DATA_SIZE_LARGE = "{{ 2 * 1024 * 1024 * 1024 }}"  # 1.4TB required, for 8MB entries get
 TIMEOUT_SECONDS = "{{ 60 * 60 }}"
 # WORK_DIR = "/tmp"
 # DATA_SIZE = "{{ 256 }}"
+# DATA_SIZE_LARGE = "{{ 65536 }}"
 # TIMEOUT_SECONDS = "{{ 5 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"

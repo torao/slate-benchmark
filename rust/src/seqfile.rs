@@ -45,7 +45,7 @@ impl GetCUT for SeqFileCUT {
     Ok(())
   }
 
-  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+  fn prepare<V: Fn(u64) -> u64, P: Fn(Index)>(&mut self, n: Index, values: V, progress: P) -> Result<()> {
     let file = self.file.as_mut().unwrap();
     let file_size = file.metadata()?.len();
     assert!(file_size % 8 == 0, "{file_size} is not a multiple of u64");
@@ -53,6 +53,7 @@ impl GetCUT for SeqFileCUT {
     assert!(size <= n);
     for i in size + 1..=n {
       file.write_all(&values(i).to_le_bytes())?;
+      (progress)(i);
     }
     Ok(())
   }

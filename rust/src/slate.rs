@@ -83,13 +83,14 @@ impl<S: Storage<Entry>, F: StorageFactory<S>> GetCUT for SlateCUT<S, F> {
     Ok(())
   }
 
-  fn prepare<V: Fn(u64) -> u64>(&mut self, n: Index, values: V) -> Result<()> {
+  fn prepare<V: Fn(u64) -> u64, P: Fn(Index)>(&mut self, n: Index, values: V, progress: P) -> Result<()> {
     let slate = self.slate.as_mut().unwrap();
     if slate.n() != n {
       assert!(slate.n() < n, "slate {} is larger than {n}", slate.n());
       while slate.n() < n {
         let n = slate.n() + 1;
         slate.append(&values(n).to_le_bytes())?;
+        (progress)(n);
       }
     }
     Ok(())
