@@ -16,8 +16,7 @@ All necessary set-up is done by the `setup` task of `mise`. You can change varia
 size and the directory (storage device) used in benchmark.
 
 ```bash
-sudo apt update
-sudo apt upgrade -y
+sudo apt update && sudo apt upgrade -y
 sudo apt install -y git gpg sudo wget curl
 sudo timedatectl set-timezone Asia/Tokyo
 

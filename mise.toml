@@ -5,13 +5,14 @@ python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = "{{ 8 * 1024 * 1024 }}" # 16+GB memory required
+WORK_DIR = "/mnt/slate/bench"       # 2TB required, minimum 1.6TB, for 8M entries
+DATA_SIZE = "{{ 8 * 1024 * 1024 }}" # 16GB memory required
 TIMEOUT_SECONDS = "{{ 60 * 60 }}"
+# WORK_DIR = "/tmp"
 # DATA_SIZE = "{{ 256 }}"
 # TIMEOUT_SECONDS = "{{ 5 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
-WORK_DIR = "/mnt/slate/bench"
 COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
 [tasks.setup]
@@ -102,7 +103,10 @@ run = "cargo build --release"
 [tasks."bench:rust"]
 description = "Run benchmark"
 depends = ["build:rust"]
-run = "target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""
+run = [
+  # prove test in rocksdb needs to open a large number of files
+  "ulimit -n $(ulimit -Hn) && target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""
+]
 
 # --- Graph ---
 
