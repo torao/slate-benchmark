@@ -80,22 +80,26 @@ fn main() -> Result<()> {
       .clear()?;
   }
 
-  fn _run_slate_cut<S, F>(experiment: &Experiment, cut: &mut SlateCUT<S, F>) -> Result<()>
-  where
-    S: Storage<Entry> + Sync + Send,
-    F: StorageFactory<S> + Sync + Send,
   {
+    let mut cut = SlateCUT::new(FileFactory::new(&dir))?;
     experiment
-      .run_testunit_append(cut)?
-      .run_testunit_biased_get(cut)?
-      .run_testunit_uniformed_get(cut)?
-      .run_testunit_cache_level(cut)?
-      .run_testunit_prove(cut)?
+      .run_testunit_append(&mut cut)?
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .run_testunit_prove(&mut cut)?
       .clear()?;
-    Ok(())
   }
-  _run_slate_cut(&experiment, &mut SlateCUT::new(FileFactory::new(&dir))?)?;
-  _run_slate_cut(&experiment, &mut SlateCUT::new(RocksDBFactory::new(&dir))?)?;
+
+  {
+    let mut cut = SlateCUT::new(RocksDBFactory::new(&dir))?;
+    experiment
+      .run_testunit_append(&mut cut)?
+      .run_testunit_biased_get(&mut cut)?
+      .run_testunit_uniformed_get(&mut cut)?
+      .run_testunit_cache_level(&mut cut)?
+      .clear()?;
+  }
 
   {
     let mut cut = SeqFileCUT::new(&dir)?;
