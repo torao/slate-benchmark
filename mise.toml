@@ -1,17 +1,17 @@
 [tools]
 rust = "1.89"
-go = "1.21"
+go = "1.25.1"
 python = "3.13"
 
 [env]
 # see also: https://mise.jdx.dev/templates.html
-DATA_SIZE = "{{ 128 * 1024 * 1024 }}" # 16+GB memory required
+DATA_SIZE = "{{ 8 * 1024 * 1024 }}" # 16+GB memory required
 TIMEOUT_SECONDS = "{{ 60 * 60 }}"
 # DATA_SIZE = "{{ 256 }}"
 # TIMEOUT_SECONDS = "{{ 5 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
-WORK_DIR = "/tmp"
+WORK_DIR = "/mnt/slate/bench"
 COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
 [tasks.setup]
