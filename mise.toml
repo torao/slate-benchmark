@@ -105,7 +105,7 @@ description = "Run benchmark"
 depends = ["build:rust"]
 run = [
   # prove test in rocksdb needs to open a large number of files
-  "ulimit -n $(ulimit -Hn) && target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""
+  "ulimit -n 20480 && target/release/slate_benchmark $DATA_SIZE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""
 ]
 
 # --- Graph ---

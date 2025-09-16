@@ -3,6 +3,7 @@ use ::slate::formula::{entry_access_distance, entry_access_distance_limits};
 use ::slate::{Entry, Index, Result, Storage};
 use chrono::Local;
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
 use rayon::{ThreadPoolBuilder, prelude::*};
@@ -530,10 +531,17 @@ impl Case {
     println!("=== Prove Benchmark ({}) ===", cut.implementation());
     let mut gauge = self.gauge();
 
-    print!("Preparing {} files with one difference each: ", gauge.len());
-    stdout().flush().unwrap();
+    // プログレスバーの準備
+    let pb = ProgressBar::new(gauge.len() as u64 * self.max_n);
+    pb.set_style(
+      ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+        .map_err(|e| ::slate::error::Error::Otherwise { source: e.into() })?
+        .progress_chars("#>-"),
+    );
+
+    println!("Preparing {} files with one difference each...", gauge.len());
     let thread_pool = ThreadPoolBuilder::new().num_threads(25).build().unwrap();
-    let start = Instant::now();
     cut.prepare(self.max_n, splitmix64)?;
     let (mut errs, targets): (Vec<Error>, Vec<_>) = thread_pool.install(|| {
       gauge
@@ -544,10 +552,10 @@ impl Case {
         .map(|(i, alt)| match alt {
           Ok(mut alt) => {
             alt.prepare(self.max_n, |k| {
+              pb.inc(1);
               let value = splitmix64(k);
               if i == k { splitmix64(value) } else { value }
             })?;
-            print!("*");
             stdout().flush().unwrap();
             Ok((i, alt))
           }
@@ -558,9 +566,8 @@ impl Case {
           Err(err) => Either::Left(err),
         })
     });
-    print!(": {}ms: done: ", start.elapsed().as_millis());
+    pb.finish();
     if !errs.is_empty() {
-      println!("preparation failure");
       drop(targets);
       for err in errs.iter() {
         eprintln!("ERROR: {err:?}");
