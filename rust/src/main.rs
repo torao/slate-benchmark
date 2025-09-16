@@ -1,6 +1,6 @@
 use ::slate::error::Error;
 use ::slate::formula::{entry_access_distance, entry_access_distance_limits};
-use ::slate::{Entry, Index, Result, Storage};
+use ::slate::{Index, Result};
 use chrono::Local;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::binarytree::FileBinaryTreeCUT;
 use crate::seqfile::SeqFileCUT;
-use crate::slate::{FileFactory, MemKVSFactory, RocksDBFactory, SlateCUT, StorageFactory};
+use crate::slate::{FileFactory, MemKVSFactory, RocksDBFactory, SlateCUT};
 use crate::stat::{ExpirationTimer, Unit, XYReport};
 
 mod binarytree;
