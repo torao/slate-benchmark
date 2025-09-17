@@ -59,6 +59,12 @@ struct Args {
 
 fn main() -> Result<()> {
   let args = Args::parse();
+  if args.data_size_large <= args.data_size {
+    eprintln!("ERROR: The small data size {} is larger than large data size {}", args.data_size, args.data_size_large);
+    return Ok(());
+  }
+  println!("Data size (small): {}", args.data_size);
+  println!("Data size (large): {}", args.data_size_large);
 
   // 作業ディレクトリ作成
   let root = PathBuf::from_str(&args.dir).unwrap();
@@ -611,14 +617,14 @@ pub enum DataSize {
 impl DataSize {
   pub fn size(&self) -> u64 {
     match self {
-      DataSize::Large(len) => *len,
       DataSize::Small(len) => *len,
+      DataSize::Large(len) => *len,
     }
   }
   pub fn file_id(&self) -> String {
     match self {
-      DataSize::Large(_) => String::from(""),
-      DataSize::Small(_) => String::from("_large"),
+      DataSize::Small(_) => String::from(""),
+      DataSize::Large(_) => String::from("_large"),
     }
   }
 }
