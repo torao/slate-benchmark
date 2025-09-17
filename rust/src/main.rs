@@ -7,7 +7,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rand::seq::SliceRandom;
 use rayon::iter::Either;
 use rayon::prelude::*;
-use slate_benchmark::{ZipfDistribution, file_size, splitmix64};
+use slate_benchmark::{ZipfSampler, file_size, splitmix64};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -493,9 +493,9 @@ impl Case {
       let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
       ExpirationTimer::heading_ms();
 
-      let mut dist = ZipfDistribution::new(100, s, ds.size() - 1);
+      let mut sampler = ZipfSampler::new(100, s, ds.size() - 1);
       for _ in 0..self.max_trials {
-        let position = dist.next_u64();
+        let position = sampler.next_u64();
         let d = cut.get(position, splitmix64)?;
         time_frequency.add(&x_label, d.as_nanos() as f64 / 1000.0 / 1000.0);
         position_frequency.add(&x_label, position);

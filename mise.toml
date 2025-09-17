@@ -104,7 +104,7 @@ run = "cargo build --release"
 
 [tasks."bench:rust"]
 description = "Run benchmark"
-depends = ["build:rust"]
+depends = ["fmt:rust", "build:rust"]
 run = [
   # prove test in rocksdb needs to open a large number of files
   "ulimit -n 20480 && target/release/slate_benchmark $DATA_SIZE $DATA_SIZE_LARGE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""

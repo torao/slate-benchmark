@@ -111,7 +111,7 @@ if [ ! -z "$ts1" ]; then
     --title 'Distribution of Access Positions following Zipf Bias $p(i)\propto 1/k^s$' \
     --xlabel 'Position $i$' \
     --ylabel 'Frequency $f$' \
-    --bin-width 1024 \
+    --bin-width 10 \
     --chart-type line
   cp "$dir/$ts1-biased-get-slate-file_x.png" "bench-biased-get-x.png"
   python3 scripts/histogram-plot.py \

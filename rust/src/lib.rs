@@ -1,3 +1,4 @@
+use core::f64;
 use std::collections::HashMap;
 use std::fs::{OpenOptions, metadata, read_dir};
 use std::path::{Path, PathBuf};
@@ -63,35 +64,51 @@ impl<S: Serializable + Clone> slate::Reader<S> for MemKVSReader<S> {
   }
 }
 
-pub struct ZipfDistribution {
+pub struct ZipfSampler {
   state: u64,
   n: u64,
-  cdf: Vec<f64>,
+  head_cdf: Vec<f64>,
+  tails: f64,
 }
 
-/// パラメータ s の効果：
-/// 0.5: 軽微な偏り
-/// 1.0: 中程度の偏り
-/// 1.5: 強い偏り (推奨)
-/// 2.0: 非常に強い偏り
-impl ZipfDistribution {
+impl ZipfSampler {
+  /// パラメータ s の効果：
+  /// 0.5: 軽微な偏り
+  /// 1.0: 中程度の偏り
+  /// 1.5: 強い偏り (推奨)
+  /// 2.0: 非常に強い偏り
   pub fn new(seed: u64, s: f64, n: u64) -> Self {
     assert!(s > 0.0);
     assert!(n >= 1);
 
-    // 各値の累積確率分布を算出
-    let mut cdf = Vec::with_capacity(n as usize);
-    let mut sum = 0.0;
-    for k in 1..=n {
-      let p = (k as f64).powf(-s);
-      sum += p;
-      cdf.push(sum);
-    }
-    for p in &mut cdf {
-      *p /= sum; // 正規化
+    // n=2G のような巨大なデータセットに対して事前計算するため、前方のみの CDF を算出し、ほとんど変化のない
+    // テールは固定値として保持する。s=0.5～2.0 では数千個程度の値が保持される
+    let min_samples = 1000;
+    let convergence_threshold = 1.0 / 1000.0;
+    let mut head_cdf = Vec::with_capacity(min_samples);
+    let mut cumulative = 0.0;
+    let mut prev_p = f64::INFINITY;
+    for i in 1..=n {
+      let p = 1.0 / (i as f64).powf(s);
+      cumulative += p;
+      head_cdf.push(cumulative);
+      if i > min_samples as u64 && (prev_p - p) / prev_p < convergence_threshold {
+        break;
+      }
+      prev_p = p;
     }
 
-    Self { state: seed, n, cdf }
+    // 正規化
+    let cutoff_index = head_cdf.len() as u64;
+    let tail_mass =
+      if cutoff_index < n { (cutoff_index + 1..=n).map(|i| 1.0 / (i as f64).powf(s)).sum::<f64>() } else { 0.0 };
+    let total_mass = cumulative + tail_mass;
+    for p in &mut head_cdf {
+      *p /= total_mass;
+    }
+    let tails = cumulative / total_mass;
+
+    Self { state: seed, n, head_cdf, tails }
   }
 
   pub fn next_u64(&mut self) -> u64 {
@@ -99,11 +116,18 @@ impl ZipfDistribution {
     self.state = splitmix64(self.state);
     let u = ((self.state >> 11) as f64) / ((1u64 << 53) as f64);
 
-    // 二分探索で対応するインデックスを取得
-    match self.cdf.binary_search_by(|p| p.partial_cmp(&u).unwrap()) {
-      Ok(i) => self.n - i as u64,
-      Err(i) => self.n - i as u64 + 1,
-    }
+    // (1, n) 範囲の Zipf 分布に従う乱数を生成
+    let i = if u <= self.tails {
+      // 二分探索で対応するインデックスを取得
+      match self.head_cdf.binary_search_by(|p| p.partial_cmp(&u).unwrap()) {
+        Ok(i) | Err(i) => (i + 1) as u64,
+      }
+    } else {
+      let tail_u = (u - self.tails) / (1.0 - self.tails);
+      let tail_range = self.n - self.head_cdf.len() as u64;
+      self.head_cdf.len() as u64 + 1 + (tail_u * tail_range as f64) as u64
+    };
+    self.n - i + 1
   }
 }
 
