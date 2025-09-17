@@ -60,7 +60,7 @@ impl GetCUT for FileBinaryTreeCUT {
     assert_eq!((n & (n - 1)), 0, "must be binary");
     BinaryHashTree::create_on_file(&self.path, u64::ilog2(n) as u8 + 1, 1 << self.cache_level, |i| {
       let bytes = values(i).to_le_bytes().to_vec();
-      (progress)(i);
+      (progress)(1);
       bytes
     })?;
     Ok(())

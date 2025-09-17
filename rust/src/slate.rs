@@ -87,12 +87,15 @@ impl<S: Storage<Entry>, F: StorageFactory<S>> GetCUT for SlateCUT<S, F> {
     let slate = self.slate.as_mut().unwrap();
     if slate.n() != n {
       assert!(slate.n() < n, "slate {} is larger than {n}", slate.n());
+      (progress)(slate.n());
       while slate.n() < n {
-        (progress)(slate.n());
-        for i in (slate.n() + 1)..=n.min(slate.n() + 1024) {
+        let length = (n - slate.n()).min(1024);
+        for i in (slate.n() + 1)..=n.min(slate.n() + 1 + length) {
           slate.append(&values(i).to_le_bytes())?;
         }
+        (progress)(length);
       }
+    } else {
       (progress)(slate.n());
     }
     Ok(())

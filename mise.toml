@@ -17,6 +17,9 @@ PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
 
+[settings]  
+task_output = "interleave" # 2 つ以上の依存を設定すると prefix モードになり ProgressBar が表示されなくなる
+
 [tasks.setup]
 description = "Setup all project dependencies"
 depends = ["{{ os() }}:setup"]
@@ -97,14 +100,16 @@ run = "cargo fmt"
 
 [tasks."build:rust"]
 description = "Build benchmark for Rust"
-depends = ["setup:rust"]
+depends = ["fmt:rust", "setup:rust"]
 sources = ["rust/src/**/*.rs", "rust/benches/**/*.rs", "rust/Cargo.toml"]
 outputs = ["target/release/slate_benchmark"]
-run = "cargo build --release"
+run = [
+  "cargo build --release"
+]
 
 [tasks."bench:rust"]
 description = "Run benchmark"
-depends = ["fmt:rust", "build:rust"]
+depends = ["build:rust"]
 run = [
   # prove test in rocksdb needs to open a large number of files
   "ulimit -n 20480 && target/release/slate_benchmark $DATA_SIZE $DATA_SIZE_LARGE --dir \"$WORK_DIR\" --timeout $TIMEOUT_SECONDS --output \"$RESULTS_DIR\""

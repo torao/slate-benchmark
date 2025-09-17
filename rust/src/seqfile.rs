@@ -53,7 +53,7 @@ impl GetCUT for SeqFileCUT {
     assert!(size <= n);
     for i in size + 1..=n {
       file.write_all(&values(i).to_le_bytes())?;
-      (progress)(i);
+      (progress)(1);
     }
     Ok(())
   }

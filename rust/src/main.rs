@@ -424,7 +424,7 @@ impl Case {
 
     // データベースを作成
     let pb = create_progress_bar(ds.size());
-    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
+    cut.prepare(ds.size(), splitmix64, |i| pb.inc(i))?;
     pb.finish();
 
     let mut timer = ExpirationTimer::new(self.max_duration, 10, self.max_trials, 10);
@@ -481,7 +481,7 @@ impl Case {
 
     // データベースを作成
     let pb = create_progress_bar(ds.size());
-    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
+    cut.prepare(ds.size(), splitmix64, |i| pb.inc(i))?;
     pb.finish();
 
     let mut position_frequency = XYReport::new(Unit::Bytes);
@@ -532,9 +532,10 @@ impl Case {
     println!("=== Prove Benchmark ({}) ===", cut.implementation());
     let mut gauge = self.gauge(ds.size());
 
+    println!("Preparing {} databases each with a different for location...", gauge.len() + 1);
     let pb = create_progress_bar((1 + gauge.len()) as u64 * ds.size());
-    cut.prepare(ds.size(), splitmix64, |i| pb.set_position(i))?;
-    pb.set_position(ds.size());
+    cut.prepare(ds.size(), splitmix64, |i| pb.inc(i))?;
+    pb.reset_elapsed();
     let (mut errs, targets): (Vec<Error>, Vec<_>) = gauge
       .iter()
       .copied()
@@ -635,13 +636,16 @@ fn filter_cv_sufficient(gauge: &[u64], ss: &stat::XYReport<u64, f64>, cv: f64) -
 
 // プログレスバーの準備
 fn create_progress_bar(n: u64) -> ProgressBar {
-  let pb = ProgressBar::with_draw_target(Some(n), ProgressDrawTarget::stderr_with_hz(1));
+  let pb = ProgressBar::with_draw_target(Some(n), ProgressDrawTarget::stdout_with_hz(1));
   pb.set_style(
     ProgressStyle::default_bar()
       .template("Preparing: {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
       .unwrap()
       .progress_chars("#>-"),
   );
+  if pb.is_hidden() {
+    println!("(progress bar is hidden)");
+  }
   pb
 }
 
