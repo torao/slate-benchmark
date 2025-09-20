@@ -517,6 +517,7 @@ impl Case {
     let id = format!("biased-get{}-{}", ds.file_id(), cut.implementation());
     let path = self.dir_report.join(format!("{}_x.csv", self.name(&id)));
     position_frequency.save_xy_to_csv(&path, "ZIPF", "POSITION")?;
+    println!("==> The results have been saved in: {}", path.to_string_lossy());
     let path = self.dir_report.join(format!("{}_y.csv", self.name(&id)));
     time_frequency.save_xy_to_csv(&path, "ZIPF", "MILLISECONDS")?;
     println!("==> The results have been saved in: {}", path.to_string_lossy());

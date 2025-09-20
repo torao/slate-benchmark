@@ -135,7 +135,7 @@ def plot_multiple_files(file_args, args):
         marker = markers[i % len(markers)]
 
         # ファイルの存在確認
-        if not Path(filepath).exists():
+        if not Path(filepath).exists() or len(filepath) == 0:
             print(f"警告: ファイルが見つかりません: {filepath}")
             continue
 

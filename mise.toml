@@ -1,5 +1,5 @@
 [tools]
-rust = "1.89"
+rust = "1.90"
 go = "1.25.1"
 python = "3.13"
 
@@ -22,11 +22,9 @@ task_output = "interleave" # 2 つ以上の依存を設定すると prefix モ�
 
 [tasks.setup]
 description = "Setup all project dependencies"
-depends = ["{{ os() }}:setup"]
-dir = "scripts"
+depends = ["setup:go", "setup:rust", "setup:python"]
 run = [
-  "pip install --upgrade pip",
-  "python -m pip install -r requirements.txt",
+  "mkdir -p $RESULTS_DIR",
 ]
 
 [tasks.clean]
@@ -54,12 +52,27 @@ depends = ["fmt:*"]
 
 # -- Python ---
 
+[tasks."setup:python"]
+dir = "scripts"
+run = [
+  "pip install --upgrade pip",
+  "python -m pip install -r requirements.txt",
+]
+
+[tasks."bench:info"]
+run = [
+  "python bench_info.py \"$WORK_DIR\"",
+]
+
 # --- Golang ---
 
 [tasks."clean:go"]
 description = "Clean Go build artifacts and results"
 dir = "golang"
-run = ["./iavl/iavl --clean && go mod tidy && go clean"]
+run = [
+  "./iavl/iavl --clean && go mod tidy && go clean",
+  "go clean -modcache -cache -testcache",
+]
 
 [tasks."fmt:go"]
 description = "Clean Go build artifacts and results"
@@ -69,7 +82,14 @@ run = ["go mod tidy && go fmt slate_benchmark/common slate_benchmark/iavl slate_
 [tasks."setup:go"]
 description = "Setup Go project dependencies"
 dir = "golang"
-run = ["go mod download"]
+run = [
+  "sudo apt install -y llvm-dev libclang-dev clang",
+  "go get slate_benchmark/common",
+  "go get slate_benchmark/doltdb",
+  "go get slate_benchmark/iavl",
+  "go mod download",
+  "go mod tidy",
+]
 
 [tasks."build:go"]
 depends = ["setup:go"]
@@ -125,16 +145,8 @@ run = ["cd scripts && python hamming-weight.py 11"]
 
 # --- Environment Dependency ---
 
-[tasks."bench:info"]
-run = ["python bench_info.py \"$WORK_DIR\""]
-
-[tasks."linux:setup"]
+[tasks."setup:matplotlib"]
 run = [
-  '''
-  mkdir -p $RESULTS_DIR
-  sudo apt install -y llvm-dev libclang-dev clang
-  ''',
-
   '''
   echo '🎸 Installing LaTeX...'
   sudo apt-get update
