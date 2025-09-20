@@ -16,6 +16,7 @@ TIMEOUT_SECONDS = "{{ 60 * 60 }}"
 PROJECT_ROOT = "{{config_root}}"
 RESULTS_DIR = "{{config_root}}/results"
 COMMIT = "{{ exec(command='git rev-parse --short HEAD') }}"
+CGO_ENABLED = "1"
 
 [settings]  
 task_output = "interleave" # 2 つ以上の依存を設定すると prefix モードになり ProgressBar が表示されなくなる
@@ -83,7 +84,7 @@ run = ["go mod tidy && go fmt slate_benchmark/common slate_benchmark/iavl slate_
 description = "Setup Go project dependencies"
 dir = "golang"
 run = [
-  "sudo apt install -y llvm-dev libclang-dev clang",
+  "sudo apt install -y build-essential",
   "go get slate_benchmark/common",
   "go get slate_benchmark/doltdb",
   "go get slate_benchmark/iavl",
@@ -147,6 +148,7 @@ run = ["cd scripts && python hamming-weight.py 11"]
 
 [tasks."setup:matplotlib"]
 run = [
+  "sudo apt install -y llvm-dev libclang-dev clang",
   '''
   echo '🎸 Installing LaTeX...'
   sudo apt-get update
